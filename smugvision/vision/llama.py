@@ -384,59 +384,76 @@ class LlamaVisionModel(VisionModel):
         """
         context_parts = []
         
-        # Add person names if available (format names nicely: replace underscores with spaces)
+        # Add person names with relationship context if available
         if person_names:
+            # Try to load relationship context
+            try:
+                from smugvision.utils.relationships import get_relationship_manager
+                rel_manager = get_relationship_manager()
+                relationship_context = rel_manager.generate_context(person_names)
+            except Exception as e:
+                logger.debug(f"Could not load relationship context: {e}")
+                relationship_context = None
             # Format names: replace underscores with spaces and capitalize properly
             formatted_names = [name.replace('_', ' ') for name in person_names]
             recognized_count = len(formatted_names)
             
-            # Handle case where there are more faces than recognized people
-            if total_faces and total_faces > recognized_count:
-                # There are other people in the photo we couldn't identify
-                if recognized_count == 1:
-                    context_parts.append(
-                        f"There are {total_faces} people in this image. "
-                        f"One of them is {formatted_names[0]}. "
-                        f"Please use their name ({formatted_names[0]}) when describing them in the caption, "
-                        f"and mention that there are other people present."
-                    )
-                elif recognized_count == 2:
-                    names_str = f"{formatted_names[0]} and {formatted_names[1]}"
-                    context_parts.append(
-                        f"There are {total_faces} people in this image. "
-                        f"Two of them are {names_str}. "
-                        f"Please use their names when describing them in the caption, "
-                        f"and mention that there are other people present."
-                    )
-                else:
-                    names_str = ", ".join(formatted_names[:-1]) + f", and {formatted_names[-1]}"
-                    context_parts.append(
-                        f"There are {total_faces} people in this image. "
-                        f"Some of them are {names_str}. "
-                        f"Please use their names when describing them in the caption, "
-                        f"and mention that there are other people present."
-                    )
+            # Build person context - use relationship description if available
+            if relationship_context:
+                # We have relationship context, use it
+                context_parts.append(
+                    f"The people in this image are {relationship_context}. "
+                    f"Please incorporate this relationship information naturally into your description."
+                )
             else:
-                # All faces were recognized (or total_faces not provided)
-                if recognized_count == 1:
-                    context_parts.append(
-                        f"The person in this image is {formatted_names[0]}. "
-                        f"Please use their name ({formatted_names[0]}) when describing them in the caption."
-                    )
-                elif recognized_count == 2:
-                    # Special formatting for two people: "Name1 and Name2"
-                    names_str = f"{formatted_names[0]} and {formatted_names[1]}"
-                    context_parts.append(
-                        f"The people in this image are {names_str}. "
-                        f"Please use their names when describing them in the caption."
-                    )
+                # No relationship context, use names only
+                # Handle case where there are more faces than recognized people
+                if total_faces and total_faces > recognized_count:
+                    # There are other people in the photo we couldn't identify
+                    if recognized_count == 1:
+                        context_parts.append(
+                            f"There are {total_faces} people in this image. "
+                            f"One of them is {formatted_names[0]}. "
+                            f"Please use their name ({formatted_names[0]}) when describing them in the caption, "
+                            f"and mention that there are other people present."
+                        )
+                    elif recognized_count == 2:
+                        names_str = f"{formatted_names[0]} and {formatted_names[1]}"
+                        context_parts.append(
+                            f"There are {total_faces} people in this image. "
+                            f"Two of them are {names_str}. "
+                            f"Please use their names when describing them in the caption, "
+                            f"and mention that there are other people present."
+                        )
+                    else:
+                        names_str = ", ".join(formatted_names[:-1]) + f", and {formatted_names[-1]}"
+                        context_parts.append(
+                            f"There are {total_faces} people in this image. "
+                            f"Some of them are {names_str}. "
+                            f"Please use their names when describing them in the caption, "
+                            f"and mention that there are other people present."
+                        )
                 else:
-                    # Three or more: "Name1, Name2, and Name3"
-                    names_str = ", ".join(formatted_names[:-1]) + f", and {formatted_names[-1]}"
-                    context_parts.append(
-                        f"The people in this image are {names_str}. "
-                        f"Please use their names when describing them in the caption."
-                    )
+                    # All faces were recognized (or total_faces not provided)
+                    if recognized_count == 1:
+                        context_parts.append(
+                            f"The person in this image is {formatted_names[0]}. "
+                            f"Please use their name ({formatted_names[0]}) when describing them in the caption."
+                        )
+                    elif recognized_count == 2:
+                        # Special formatting for two people: "Name1 and Name2"
+                        names_str = f"{formatted_names[0]} and {formatted_names[1]}"
+                        context_parts.append(
+                            f"The people in this image are {names_str}. "
+                            f"Please use their names when describing them in the caption."
+                        )
+                    else:
+                        # Three or more: "Name1, Name2, and Name3"
+                        names_str = ", ".join(formatted_names[:-1]) + f", and {formatted_names[-1]}"
+                        context_parts.append(
+                            f"The people in this image are {names_str}. "
+                            f"Please use their names when describing them in the caption."
+                        )
         
         # Add location context if available
         if location_context:
