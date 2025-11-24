@@ -321,6 +321,153 @@ def _extract_gps_with_exifread(image_path: str) -> ExifLocation:
     return location
 
 
+def _load_geocoding_config() -> dict:
+    """Load geocoding configuration from YAML file.
+    
+    Returns:
+        Configuration dictionary with exclusion lists
+    """
+    config_path = Path.home() / ".smugvision" / "geocoding_config.yaml"
+    
+    # Default config if file doesn't exist
+    default_config = {
+        'excluded_venue_types': ['toilets', 'toilet', 'restroom', 'bathroom', 'parking'],
+        'excluded_venue_names': ["restroom", "bathroom", "toilet", "parking"],
+        'max_venue_distance': 200,
+        'prefer_significant_venues': True
+    }
+    
+    if not config_path.exists():
+        return default_config
+    
+    try:
+        import yaml
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            return {**default_config, **config}  # Merge with defaults
+    except Exception as e:
+        logger.debug(f"Could not load geocoding config: {e}")
+        return default_config
+
+
+def _search_nearby_venues_overpass(
+    latitude: float,
+    longitude: float,
+    radius: int = 200,
+    timeout: int = 10
+) -> list:
+    """Search for nearby venues using Overpass API (OpenStreetMap).
+    
+    Much faster than multiple Nominatim searches - single query gets all POIs.
+    Filters out unwanted venue types based on configuration.
+    
+    Args:
+        latitude: Latitude in decimal degrees
+        longitude: Longitude in decimal degrees
+        radius: Search radius in meters
+        timeout: API timeout in seconds
+        
+    Returns:
+        List of nearby venues with name, distance, and type (filtered)
+    """
+    # Load exclusion config
+    config = _load_geocoding_config()
+    excluded_types = set(t.lower() for t in config.get('excluded_venue_types', []))
+    excluded_names = [n.lower() for n in config.get('excluded_venue_names', [])]
+    try:
+        import requests
+        
+        # Overpass API query to find all named POIs within radius
+        overpass_url = "https://overpass-api.de/api/interpreter"
+        overpass_query = f"""
+        [out:json][timeout:{timeout}];
+        (
+          node["name"]["amenity"](around:{radius},{latitude},{longitude});
+          node["name"]["tourism"](around:{radius},{latitude},{longitude});
+          node["name"]["shop"](around:{radius},{latitude},{longitude});
+          node["name"]["leisure"](around:{radius},{latitude},{longitude});
+          way["name"]["amenity"](around:{radius},{latitude},{longitude});
+          way["name"]["tourism"](around:{radius},{latitude},{longitude});
+          way["name"]["shop"](around:{radius},{latitude},{longitude});
+          way["name"]["leisure"](around:{radius},{latitude},{longitude});
+        );
+        out center;
+        """
+        
+        response = requests.post(
+            overpass_url,
+            data={'data': overpass_query},
+            timeout=timeout
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            venues = []
+            
+            for element in data.get('elements', []):
+                name = element.get('tags', {}).get('name', '').strip()
+                if not name:
+                    continue
+                
+                # Get coordinates (for ways, use center)
+                if 'lat' in element and 'lon' in element:
+                    elem_lat = element['lat']
+                    elem_lon = element['lon']
+                elif 'center' in element:
+                    elem_lat = element['center']['lat']
+                    elem_lon = element['center']['lon']
+                else:
+                    continue
+                
+                # Calculate distance
+                lat1, lon1 = radians(latitude), radians(longitude)
+                lat2, lon2 = radians(elem_lat), radians(elem_lon)
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+                c = 2 * asin(sqrt(a))
+                distance = 6371000 * c
+                
+                if distance <= radius:
+                    # Determine type from tags
+                    tags = element.get('tags', {})
+                    poi_type = (
+                        tags.get('amenity') or
+                        tags.get('tourism') or
+                        tags.get('shop') or
+                        tags.get('leisure') or
+                        'location'
+                    )
+                    
+                    # Skip excluded venue types
+                    if poi_type.lower() in excluded_types:
+                        logger.debug(f"Excluding venue type: {poi_type}")
+                        continue
+                    
+                    # Skip excluded venue names (partial match, case-insensitive)
+                    name_lower = name.lower()
+                    if any(excl in name_lower for excl in excluded_names):
+                        logger.debug(f"Excluding venue name: {name}")
+                        continue
+                    
+                    venues.append({
+                        'name': name,
+                        'distance': distance,
+                        'type': poi_type
+                    })
+            
+            # Sort by distance
+            venues.sort(key=lambda x: x['distance'])
+            return venues
+        else:
+            logger.debug(f"Overpass API returned status {response.status_code}")
+            return []
+            
+    except Exception as e:
+        logger.debug(f"Overpass API search failed: {e}")
+        return []
+
+
 def reverse_geocode(
     latitude: float,
     longitude: float,
@@ -371,64 +518,9 @@ def reverse_geocode(
                     place_type = raw_data.get('type', '')
                     place_class = raw_data.get('class', '')
                     
-                    # If no name, search for any nearby business/venue
-                    # Search for various venue types: restaurants, theaters, businesses, etc.
+                    # If no name, search for nearby venues using Overpass API (much faster)
                     if not building_name:
-                        # Comprehensive list of venue/business types to search
-                        all_venue_types = [
-                            'restaurant', 'cafe', 'coffee', 'bar', 'pub', 'brewery',
-                            'theater', 'theatre', 'cinema', 'venue', 'hall', 'auditorium',
-                            'museum', 'gallery', 'library',
-                            'school', 'university', 'college',
-                            'hotel', 'motel', 'resort',
-                            'shop', 'store', 'market', 'mall',
-                            'gym', 'fitness', 'sports',
-                            'park', 'stadium', 'arena',
-                            'church', 'temple', 'mosque', 'synagogue',
-                            'hospital', 'clinic', 'pharmacy',
-                            'bank', 'office', 'business'
-                        ]
-                        
-                        # Collect all nearby venues within 200m
-                        nearby_venues = []
-                        
-                        for search_term in all_venue_types:
-                            try:
-                                query = f"{search_term} near {latitude},{longitude}"
-                                search_results = geolocator.geocode(
-                                    query,
-                                    exactly_one=False,
-                                    limit=5,
-                                    timeout=5
-                                )
-                                
-                                if search_results:
-                                    for result in search_results:
-                                        result_lat = float(result.raw.get('lat', 0))
-                                        result_lon = float(result.raw.get('lon', 0))
-                                        
-                                        # Calculate distance
-                                        lat1, lon1 = radians(latitude), radians(longitude)
-                                        lat2, lon2 = radians(result_lat), radians(result_lon)
-                                        dlat = lat2 - lat1
-                                        dlon = lon2 - lon1
-                                        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-                                        c = 2 * asin(sqrt(a))
-                                        distance = 6371000 * c
-                                        
-                                        if distance < 200:  # Within 200 meters
-                                            candidate_name = result.raw.get('name', '').strip()
-                                            if candidate_name:
-                                                # Avoid duplicates
-                                                if not any(v['name'] == candidate_name for v in nearby_venues):
-                                                    nearby_venues.append({
-                                                        'name': candidate_name,
-                                                        'distance': distance,
-                                                        'type': search_term
-                                                    })
-                            except Exception as e:
-                                logger.debug(f"Could not search for {search_term} nearby: {e}")
-                                continue
+                        nearby_venues = _search_nearby_venues_overpass(latitude, longitude)
                         
                         # Sort by distance (closest first)
                         nearby_venues.sort(key=lambda x: x['distance'])

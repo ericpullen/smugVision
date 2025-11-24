@@ -359,7 +359,7 @@ class FaceRecognizer:
             logger.warning(f"Error identifying faces in {image_path}: {e}")
             return []
     
-    def get_person_names(self, image_path: str, min_confidence: float = 0.35) -> List[str]:
+    def get_person_names(self, image_path: str, min_confidence: float = 0.25) -> List[str]:
         """Get list of identified person names from an image.
         
         Args:
