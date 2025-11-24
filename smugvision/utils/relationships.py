@@ -19,7 +19,7 @@ class RelationshipManager:
     
     This class loads relationship data from a YAML configuration file and
     provides methods to generate natural language descriptions of people
-    in images based on their relationships.
+    in images based on their relationships to each other.
     """
     
     def __init__(self, config_path: Optional[str] = None):
@@ -30,9 +30,8 @@ class RelationshipManager:
                         Defaults to ~/.smugvision/relationships.yaml
         """
         self.config_path = config_path or str(Path.home() / ".smugvision" / "relationships.yaml")
-        self.primary_person: Optional[str] = None
-        self.people: Dict[str, Dict] = {}
-        self.groups: Dict[str, Dict] = {}
+        self.relationships: List[tuple] = []  # List of (person1, person2, description) tuples
+        self.groups: List[Dict] = []
         self.enabled = False
         
         if YAML_AVAILABLE:
@@ -54,13 +53,17 @@ class RelationshipManager:
             with open(config_file, 'r') as f:
                 config = yaml.safe_load(f)
             
-            self.primary_person = config.get('primary_person')
-            self.people = config.get('people', {})
-            self.groups = config.get('groups', {})
+            # Load relationships as list of tuples
+            self.relationships = [
+                (rel[0], rel[1], rel[2])
+                for rel in config.get('relationships', [])
+            ]
+            
+            self.groups = config.get('groups', [])
             self.enabled = True
             
             logger.info(
-                f"Loaded relationship config: {len(self.people)} people, "
+                f"Loaded relationship config: {len(self.relationships)} relationships, "
                 f"{len(self.groups)} groups"
             )
             return True
@@ -69,19 +72,47 @@ class RelationshipManager:
             logger.warning(f"Failed to load relationship config: {e}")
             return False
     
-    def get_description(self, person_name: str) -> Optional[str]:
-        """Get relationship description for a person.
+    def get_relationships_for_people(self, person_names: List[str]) -> Dict[str, List[tuple]]:
+        """Get all relationships for people in the image.
         
         Args:
-            person_name: Name of the person (e.g., "Kelly_Pullen")
+            person_names: List of person names in the image
             
         Returns:
-            Relationship description (e.g., "your wife") or None
+            Dictionary mapping relationship types to lists of (person1, person2) tuples
         """
-        if not self.enabled or person_name not in self.people:
-            return None
+        if not self.enabled or not person_names:
+            return {}
         
-        return self.people[person_name].get('description')
+        person_set = set(person_names)
+        relationships_by_type = {}
+        
+        # Find all relationships between people in the image
+        for person1, person2, rel_type in self.relationships:
+            # Check if both people are in the image
+            if person1 in person_set and person2 in person_set:
+                if rel_type not in relationships_by_type:
+                    relationships_by_type[rel_type] = []
+                relationships_by_type[rel_type].append((person1, person2))
+        
+        return relationships_by_type
+    
+    def _format_names(self, names: List[str]) -> str:
+        """Format a list of names nicely.
+        
+        Args:
+            names: List of person names
+            
+        Returns:
+            Formatted string like "Name1 and Name2" or "Name1, Name2, and Name3"
+        """
+        if len(names) == 1:
+            return names[0].replace('_', ' ')
+        elif len(names) == 2:
+            return f"{names[0].replace('_', ' ')} and {names[1].replace('_', ' ')}"
+        else:
+            formatted = [n.replace('_', ' ') for n in names]
+            return ", ".join(formatted[:-1]) + f", and {formatted[-1]}"
     
     def get_group_description(self, person_names: List[str]) -> Optional[str]:
         """Get group description if all members are present.
@@ -97,8 +128,10 @@ class RelationshipManager:
         
         person_set = set(person_names)
         
-        # Check for exact group matches
-        for group_name, group_data in self.groups.items():
+        # Check for exact group matches (try largest groups first)
+        sorted_groups = sorted(self.groups, key=lambda g: len(g.get('members', [])), reverse=True)
+        
+        for group_data in sorted_groups:
             members = set(group_data.get('members', []))
             if members == person_set:
                 return group_data.get('description')
@@ -109,8 +142,8 @@ class RelationshipManager:
         """Generate natural language context for people in an image.
         
         This method tries to find the most natural way to describe the people
-        in the image, using group descriptions when appropriate or individual
-        relationships when needed.
+        in the image, using group descriptions when appropriate or relationship
+        descriptions when available.
         
         Args:
             person_names: List of identified person names
@@ -126,27 +159,60 @@ class RelationshipManager:
         if group_desc:
             return group_desc
         
-        # Otherwise, build individual descriptions
-        descriptions = []
-        for name in person_names:
-            desc = self.get_description(name)
-            if desc:
-                # Use the description (e.g., "your wife")
-                descriptions.append(desc)
-            else:
-                # Fall back to just the name
-                descriptions.append(name.replace('_', ' '))
+        # Get relationship descriptions between people
+        relationships_by_type = self.get_relationships_for_people(person_names)
         
-        if not descriptions:
+        if not relationships_by_type:
+            # No relationship info available
             return None
         
-        # Format the list naturally
-        if len(descriptions) == 1:
-            return descriptions[0]
-        elif len(descriptions) == 2:
-            return f"{descriptions[0]} and {descriptions[1]}"
-        else:
-            return ", ".join(descriptions[:-1]) + f", and {descriptions[-1]}"
+        # Build natural language description based on relationship types
+        descriptions = []
+        
+        # Priority order for relationships (most specific first)
+        if "spouse" in relationships_by_type and len(relationships_by_type["spouse"]) == 1:
+            # Married couple
+            pair = relationships_by_type["spouse"][0]
+            descriptions.append(f"{pair[0].replace('_', ' ')} and {pair[1].replace('_', ' ')} (married couple)")
+        
+        if "parent" in relationships_by_type:
+            # Parent-child relationships
+            parents = set()
+            children = set()
+            for parent, child in relationships_by_type["parent"]:
+                parents.add(parent)
+                children.add(child)
+            
+            if len(parents) == 2 and len(children) == 1:
+                descriptions.append(f"parents {self._format_names(list(parents))} with their child {children.pop().replace('_', ' ')}")
+            elif len(parents) == 2 and len(children) > 1:
+                descriptions.append(f"parents {self._format_names(list(parents))} with their children {self._format_names(list(children))}")
+            elif len(parents) == 1 and len(children) == 1:
+                descriptions.append(f"parent and child")
+            elif len(parents) == 1 and len(children) > 1:
+                descriptions.append(f"parent with children")
+        
+        if "grandparent" in relationships_by_type:
+            grandparents = {gp for gp, _ in relationships_by_type["grandparent"]}
+            grandchildren = {gc for _, gc in relationships_by_type["grandparent"]}
+            if grandparents and grandchildren:
+                descriptions.append(f"grandparent(s) and grandchild(ren)")
+        
+        if "sibling" in relationships_by_type and len(person_names) == 2:
+            # Just siblings
+            descriptions.append("siblings")
+        
+        if "cousin" in relationships_by_type:
+            descriptions.append("cousins")
+        
+        if "partner" in relationships_by_type:
+            descriptions.append("partners")
+        
+        if descriptions:
+            return "; ".join(descriptions)
+        
+        # Fallback: just list the relationship types
+        return f"related as: {', '.join(relationships_by_type.keys())}"
 
 
 # Global instance
