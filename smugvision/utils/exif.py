@@ -185,7 +185,12 @@ def extract_exif_location(image_path: str) -> ExifLocation:
             lon_ref = None
             
             for key, value in gps_info.items():
-                gps_tag = GPS.get(key, key)
+                # GPS is an Enum in modern Pillow - get the tag name
+                try:
+                    gps_tag = GPS(key).name
+                except (ValueError, KeyError):
+                    # Fallback for unknown tags
+                    gps_tag = key
                 
                 if gps_tag == 'GPSLatitude':
                     latitude = value

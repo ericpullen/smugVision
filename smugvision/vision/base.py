@@ -147,9 +147,15 @@ class VisionModel(ABC):
         # Identify faces if face recognizer is provided
         total_faces = 0
         if face_recognizer and generate_caption:
+            logger.debug(f"Starting face recognition for {image_path}")
             try:
+                logger.debug("Calling face_recognizer.get_person_names()...")
                 person_names = face_recognizer.get_person_names(image_path)
+                logger.debug(f"get_person_names() returned: {person_names}")
+                
+                logger.debug("Calling face_recognizer.get_face_count()...")
                 total_faces = face_recognizer.get_face_count(image_path)
+                logger.debug(f"get_face_count() returned: {total_faces}")
                 
                 if person_names:
                     recognized_count = len(person_names)
@@ -159,9 +165,17 @@ class VisionModel(ABC):
                         f"{', '.join(person_names)}"
                     )
                     if total_faces > recognized_count:
-                        logger.debug(
+                        logger.info(
                             f"{total_faces - recognized_count} face(s) could not be identified"
                         )
+                elif total_faces > 0:
+                    # Faces detected but none recognized
+                    logger.info(
+                        f"Detected {total_faces} face(s) in image, but could not identify any of them"
+                    )
+                else:
+                    # No faces detected
+                    logger.info("No faces detected in image")
             except Exception as e:
                 logger.warning(
                     f"Failed to identify faces in {image_path}: {e}",

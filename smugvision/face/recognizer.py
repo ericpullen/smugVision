@@ -40,21 +40,27 @@ class FaceRecognizer:
     Attributes:
         reference_faces: Dictionary mapping person names to face encodings
         tolerance: How much distance between faces to consider it a match (lower = stricter)
+        model: Face detection model to use ('hog' or 'cnn')
     """
     
     def __init__(
         self,
         reference_faces_dir: Optional[str] = None,
-        tolerance: float = 0.6
+        tolerance: float = 0.6,
+        model: str = "cnn",
+        detection_scale: float = 0.5
     ) -> None:
         """Initialize face recognizer.
         
         Args:
-            reference_faces_dir: Directory containing reference face images.
-                                 Images should be named with person names
-                                 (e.g., "John_Doe.jpg", "Jane_Smith.png")
+            reference_faces_dir: Directory containing person subdirectories with reference images.
             tolerance: Face recognition tolerance (0.0-1.0). Lower is stricter.
                       Default 0.6 is a good balance.
+            model: Face detection model - 'hog' (faster, less accurate) or 'cnn' (slower, more accurate).
+                   Default 'cnn' is recommended for better detection with glasses, shadows, angles.
+            detection_scale: Scale factor for resizing images before face detection (0.0-1.0).
+                           Lower values = faster but may miss small/distant faces.
+                           Default 0.5 gives 3-4x speedup with minimal accuracy loss.
         
         Raises:
             ImportError: If face_recognition library is not installed or models are missing
@@ -81,6 +87,8 @@ class FaceRecognizer:
         
         self.reference_faces: Dict[str, List] = {}
         self.tolerance = tolerance
+        self.model = model
+        self.detection_scale = max(0.1, min(1.0, detection_scale))  # Clamp between 0.1 and 1.0
         
         if reference_faces_dir:
             self.load_reference_faces(reference_faces_dir)
@@ -88,18 +96,21 @@ class FaceRecognizer:
     def load_reference_faces(self, directory: str) -> None:
         """Load reference face images from a directory.
         
-        Each image file should be named with the person's name.
-        Multiple images per person are supported (use same name prefix).
+        Each subdirectory should be named after a person, containing their reference images.
+        All image files within a person's directory will be loaded as reference faces.
         
         Example directory structure:
             faces/
-                John_Doe_1.jpg
-                John_Doe_2.jpg
-                Jane_Smith.jpg
-                Bob_Johnson.png
+                John_Doe/
+                    photo1.jpg
+                    photo2.jpg
+                    vacation.png
+                Jane_Smith/
+                    profile.jpg
+                    headshot.heic
         
         Args:
-            directory: Path to directory containing reference face images
+            directory: Path to directory containing person subdirectories with reference images
         """
         ref_dir = Path(directory)
         if not ref_dir.exists():
@@ -112,33 +123,44 @@ class FaceRecognizer:
         image_extensions = {'.jpg', '.jpeg', '.png', '.heic', '.heif'}
         
         loaded_count = 0
-        for image_path in ref_dir.iterdir():
-            if not image_path.is_file():
+        
+        # Iterate through subdirectories (each is a person)
+        for person_dir in ref_dir.iterdir():
+            if not person_dir.is_dir():
+                # Skip files in the root directory
                 continue
             
-            if image_path.suffix.lower() not in image_extensions:
-                continue
+            person_name = person_dir.name
+            person_face_count = 0
             
-            # Extract person name from filename (remove extension and numbers)
-            person_name = image_path.stem
-            # Remove trailing numbers/underscores (e.g., "John_Doe_1" -> "John_Doe")
-            person_name = person_name.rsplit('_', 1)[0] if '_' in person_name else person_name
+            # Load all images from this person's directory
+            for image_path in person_dir.iterdir():
+                if not image_path.is_file():
+                    continue
+                
+                if image_path.suffix.lower() not in image_extensions:
+                    logger.debug(f"Skipping non-image file: {image_path.name}")
+                    continue
+                
+                try:
+                    # Load and encode the face
+                    encoding = self._encode_face(image_path)
+                    if encoding is not None:
+                        if person_name not in self.reference_faces:
+                            self.reference_faces[person_name] = []
+                        self.reference_faces[person_name].append(encoding)
+                        loaded_count += 1
+                        person_face_count += 1
+                        logger.debug(f"Loaded reference face for {person_name} from {image_path.name}")
+                    else:
+                        logger.warning(f"No face found in reference image: {image_path}")
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to load reference face from {image_path}: {e}"
+                    )
             
-            try:
-                # Load and encode the face
-                encoding = self._encode_face(image_path)
-                if encoding is not None:
-                    if person_name not in self.reference_faces:
-                        self.reference_faces[person_name] = []
-                    self.reference_faces[person_name].append(encoding)
-                    loaded_count += 1
-                    logger.debug(f"Loaded reference face: {person_name} from {image_path.name}")
-                else:
-                    logger.warning(f"No face found in reference image: {image_path}")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to load reference face from {image_path}: {e}"
-                )
+            if person_face_count > 0:
+                logger.debug(f"Loaded {person_face_count} reference face(s) for {person_name}")
         
         logger.info(
             f"Loaded {loaded_count} reference face(s) for "
@@ -158,11 +180,32 @@ class FaceRecognizer:
             ImportError: If face_recognition models are not installed
         """
         try:
-            # Load image (face_recognition handles various formats)
-            image = face_recognition.load_image_file(str(image_path))
+            # Load image and handle EXIF orientation
+            from PIL import Image, ImageOps
+            import numpy as np
             
-            # Find face locations
-            face_locations = face_recognition.face_locations(image)
+            pil_image = Image.open(str(image_path))
+            # Apply EXIF orientation
+            pil_image = ImageOps.exif_transpose(pil_image)
+            # Convert to RGB if needed
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+            
+            # Resize reference images to reasonable size for faster processing
+            # Reference faces should be clean/front-facing, so we can use smaller size
+            max_dimension = 800
+            if max(pil_image.size) > max_dimension:
+                # Calculate new size maintaining aspect ratio
+                ratio = max_dimension / max(pil_image.size)
+                new_size = (int(pil_image.size[0] * ratio), int(pil_image.size[1] * ratio))
+                pil_image = pil_image.resize(new_size, Image.Resampling.LANCZOS)
+            
+            # Convert to numpy array
+            image = np.array(pil_image)
+            
+            # Use HOG (faster) for reference faces since they should be clean, front-facing
+            # We use CNN for actual image detection where faces might be at angles/shadows
+            face_locations = face_recognition.face_locations(image, model="hog")
             
             if not face_locations or len(face_locations) == 0:
                 return None
@@ -170,7 +213,8 @@ class FaceRecognizer:
             # Get face encodings (use first face if multiple)
             face_encodings = face_recognition.face_encodings(
                 image, 
-                face_locations
+                face_locations,
+                model="large"  # Use large model for better accuracy
             )
             
             # Check if we have any encodings (use len() to avoid NumPy boolean ambiguity)
@@ -211,12 +255,53 @@ class FaceRecognizer:
             return []
         
         try:
-            # Load image
-            image = face_recognition.load_image_file(str(image_path))
+            # Load image and handle EXIF orientation
+            # face_recognition.load_image_file doesn't handle EXIF orientation,
+            # so we need to use PIL to load and rotate first
+            from PIL import Image, ImageOps
+            import numpy as np
             
-            # Find all faces in the image
-            face_locations = face_recognition.face_locations(image)
-            face_encodings = face_recognition.face_encodings(image, face_locations)
+            pil_image = Image.open(str(image_path))
+            # Apply EXIF orientation (rotates/flips image if needed)
+            pil_image = ImageOps.exif_transpose(pil_image)
+            # Convert to RGB if needed (face_recognition requires RGB)
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+            
+            # Resize for faster detection if scale < 1.0
+            original_size = pil_image.size
+            if self.detection_scale < 1.0:
+                detection_size = (
+                    int(original_size[0] * self.detection_scale),
+                    int(original_size[1] * self.detection_scale)
+                )
+                detection_image = pil_image.resize(detection_size, Image.Resampling.LANCZOS)
+            else:
+                detection_image = pil_image
+            
+            # Convert to numpy array for face_recognition
+            detection_array = np.array(detection_image)
+            
+            # Find all faces in the (possibly downscaled) image using configured model
+            face_locations = face_recognition.face_locations(detection_array, model=self.model)
+            
+            # Scale face locations back to original size if we downscaled
+            if self.detection_scale < 1.0 and face_locations:
+                scale_factor = 1.0 / self.detection_scale
+                face_locations = [
+                    (
+                        int(top * scale_factor),
+                        int(right * scale_factor),
+                        int(bottom * scale_factor),
+                        int(left * scale_factor)
+                    )
+                    for top, right, bottom, left in face_locations
+                ]
+                # Use original image for encoding (better quality)
+                original_array = np.array(pil_image)
+                face_encodings = face_recognition.face_encodings(original_array, face_locations, model="large")
+            else:
+                face_encodings = face_recognition.face_encodings(detection_array, face_locations, model="large")
             
             # Check if we have any encodings (use len() to avoid NumPy boolean ambiguity)
             if not face_encodings or len(face_encodings) == 0:
@@ -274,7 +359,7 @@ class FaceRecognizer:
             logger.warning(f"Error identifying faces in {image_path}: {e}")
             return []
     
-    def get_person_names(self, image_path: str, min_confidence: float = 0.5) -> List[str]:
+    def get_person_names(self, image_path: str, min_confidence: float = 0.35) -> List[str]:
         """Get list of identified person names from an image.
         
         Args:
