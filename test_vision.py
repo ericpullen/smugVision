@@ -10,17 +10,52 @@ Usage:
 
 import sys
 import logging
+import time
 from pathlib import Path
 
 from smugvision.vision.factory import VisionModelFactory
 from smugvision.vision.exceptions import VisionModelError
 
 # Configure logging
+# Use DEBUG level to see detailed face recognition logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Timing tracker
+class TimingTracker:
+    """Track timing for different stages of processing."""
+    def __init__(self):
+        self.timings = {}
+        self.start_times = {}
+    
+    def start(self, stage_name):
+        """Start timing a stage."""
+        self.start_times[stage_name] = time.time()
+    
+    def end(self, stage_name):
+        """End timing a stage."""
+        if stage_name in self.start_times:
+            elapsed = time.time() - self.start_times[stage_name]
+            self.timings[stage_name] = elapsed
+            del self.start_times[stage_name]
+            return elapsed
+        return None
+    
+    def print_summary(self):
+        """Print timing summary."""
+        print("\n" + "=" * 60)
+        print("⏱️  TIMING BREAKDOWN")
+        print("=" * 60)
+        total = sum(self.timings.values())
+        for stage, duration in sorted(self.timings.items(), key=lambda x: x[1], reverse=True):
+            percentage = (duration / total * 100) if total > 0 else 0
+            print(f"{stage:.<45} {duration:>7.2f}s ({percentage:>5.1f}%)")
+        print("-" * 60)
+        print(f"{'TOTAL':.<45} {total:>7.2f}s")
+        print("=" * 60)
 
 
 def main():
@@ -34,6 +69,9 @@ def main():
     if not image_path.exists():
         print(f"Error: Image file not found: {image_path}")
         sys.exit(1)
+    
+    # Initialize timing tracker
+    timer = TimingTracker()
     
     # Default prompts (can be customized)
     caption_prompt = (
@@ -58,38 +96,15 @@ def main():
     try:
         # Create vision model using factory
         print(f"Initializing Llama 3.2 Vision model...")
+        timer.start("1. Model Initialization")
         model = VisionModelFactory.create(
             model_name="llama3.2-vision",
             endpoint="http://localhost:11434"
         )
+        timer.end("1. Model Initialization")
         
         print(f"\nProcessing image: {image_path}")
         print("-" * 60)
-        
-        # Check for EXIF location data
-        print("\nChecking for EXIF location data...")
-        try:
-            from smugvision.utils.exif import extract_exif_location, reverse_geocode
-            exif_location = extract_exif_location(str(image_path))
-            if exif_location.has_coordinates:
-                print(f"✓ EXIF Location found:")
-                print(f"  Coordinates: {exif_location.latitude:.6f}, {exif_location.longitude:.6f}")
-                # Try reverse geocoding
-                if exif_location.latitude and exif_location.longitude:
-                    # Use interactive=True for test script so user can select if multiple venues
-                    location_name = reverse_geocode(
-                        exif_location.latitude,
-                        exif_location.longitude,
-                        interactive=True
-                    )
-                    if location_name:
-                        print(f"  Location: {location_name}")
-                        exif_location.location_name = location_name
-            else:
-                print("  No GPS coordinates found in EXIF data")
-        except Exception as e:
-            print(f"  Could not extract EXIF location: {e}")
-            logger.debug(f"EXIF extraction error: {e}", exc_info=True)
         
         # Optional: Initialize face recognizer if reference faces directory exists
         face_recognizer = None
@@ -98,7 +113,9 @@ def main():
             try:
                 from smugvision.face import FaceRecognizer
                 print(f"\nLoading reference faces from: {reference_faces_dir}")
+                timer.start("2. Face Recognizer Initialization")
                 face_recognizer = FaceRecognizer(str(reference_faces_dir))
+                timer.end("2. Face Recognizer Initialization")
                 print(f"  Loaded {len(face_recognizer.reference_faces)} person(s)")
             except ImportError as e:
                 print(f"  Face recognition not available: {e}")
@@ -109,6 +126,7 @@ def main():
                 print(f"  Could not load face recognizer: {e}")
         
         # Process image (EXIF location and face recognition will be automatically used)
+        timer.start("3. Total Image Processing")
         result = model.process_image(
             image_path=str(image_path),
             caption_prompt=caption_prompt,
@@ -120,6 +138,7 @@ def main():
             use_exif_location=True,  # Enable EXIF location extraction
             face_recognizer=face_recognizer  # Enable face recognition if available
         )
+        timer.end("3. Total Image Processing")
         
         # Display results
         print("\n=== RESULTS ===")
@@ -129,6 +148,9 @@ def main():
         print(f"\nTags ({len(result.tags)}):")
         for tag in result.tags:
             print(f"  - {tag}")
+        
+        # Print timing summary
+        timer.print_summary()
         
         print("\n" + "=" * 60)
         print("Test completed successfully!")
