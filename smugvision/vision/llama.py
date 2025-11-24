@@ -400,10 +400,11 @@ class LlamaVisionModel(VisionModel):
             
             # Build person context - use relationship description if available
             if relationship_context:
-                # We have relationship context, use it
+                # We have relationship context, include both names and relationships
+                names_list = ", ".join(formatted_names[:-1]) + f" and {formatted_names[-1]}" if len(formatted_names) > 1 else formatted_names[0]
                 context_parts.append(
-                    f"The people in this image are {relationship_context}. "
-                    f"Please incorporate this relationship information naturally into your description."
+                    f"The people in this image are {names_list} ({relationship_context}). "
+                    f"Please use their names and incorporate the relationship information naturally into your description."
                 )
             else:
                 # No relationship context, use names only
