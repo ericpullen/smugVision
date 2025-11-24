@@ -1,0 +1,23 @@
+# Core dependencies
+ollama>=0.1.0
+pillow>=10.0.0
+pillow-heif>=0.13.0  # For HEIC/HEIF image support
+pyyaml>=6.0
+requests>=2.31.0
+python-dateutil>=2.8.2
+
+# Face recognition (optional)
+face-recognition>=1.3.0  # For face detection and recognition (requires dlib)
+setuptools>=65.0.0  # Required by face_recognition_models
+# Note: After installing face-recognition, also install models:
+# pip install git+https://github.com/ageitgey/face_recognition_models
+
+# Optional dependencies
+geopy>=2.4.0  # For reverse geocoding (optional, falls back gracefully if not installed)
+exifread>=3.0.0  # Alternative EXIF reader, better for some HEIC files (optional)
+
+# Development dependencies
+pytest>=7.4.0
+black>=23.0.0
+pylint>=3.0.0
+
