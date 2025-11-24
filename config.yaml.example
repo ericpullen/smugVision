@@ -1,0 +1,76 @@
+# smugVision Configuration File
+# 
+# This is an example configuration file for smugVision.
+# Copy this file to '~/.smugvision/config.yaml' and fill in your values:
+#   mkdir -p ~/.smugvision
+#   cp config.yaml.example ~/.smugvision/config.yaml
+#
+# This keeps all smugVision configuration files in one place, alongside
+# relationships.yaml and geocoding_config.yaml.
+
+# SmugMug API Configuration
+# Obtain your API credentials from https://api.smugmug.com/api/developer/apply
+smugmug:
+  api_key: "YOUR_API_KEY_HERE"
+  api_secret: "YOUR_API_SECRET_HERE"
+  user_token: "YOUR_USER_TOKEN_HERE"
+  user_secret: "YOUR_USER_SECRET_HERE"
+
+# Vision Model Configuration
+vision:
+  model: "llama3.2-vision"           # Model name (llama3.2-vision, etc.)
+  endpoint: "http://localhost:11434" # Ollama API endpoint
+  temperature: 0.7                   # Sampling temperature (0.0-1.0)
+  max_tokens: 150                    # Maximum tokens in response
+  timeout: 120                       # Request timeout in seconds
+
+# Face Recognition Configuration
+face_recognition:
+  enabled: true                      # Enable/disable face recognition
+  reference_faces_dir: "~/.smugvision/reference_faces"  # Directory with reference face images
+  tolerance: 0.6                     # Face matching tolerance (lower = stricter, 0.0-1.0)
+  model: "cnn"                       # Detection model: 'hog' (faster) or 'cnn' (more accurate)
+  detection_scale: 0.5               # Image scale for detection (0.1-1.0, lower = faster)
+  min_confidence: 0.25               # Minimum confidence to include person in results (0.0-1.0)
+
+# Processing Configuration
+processing:
+  marker_tag: "smugvision"           # Tag to mark processed images
+  generate_captions: true            # Generate image captions
+  generate_tags: true                # Generate keyword tags
+  preserve_existing: true            # Keep existing captions/tags when adding new ones
+  image_size: "medium"               # Download size from SmugMug (small, medium, large, etc.)
+  use_exif_location: true            # Extract and use GPS location from EXIF
+
+# Prompt Configuration
+# Customize these prompts to change how the AI describes your images
+prompts:
+  caption: |
+    Analyze this image and provide a concise, descriptive caption 
+    (1-2 sentences) that describes the main subject, setting, and 
+    any notable activities or features.
+  
+  tags: |
+    Generate 5-10 simple, single-word or short-phrase keyword tags for this image. 
+    Use simple descriptive words like: restaurant, eating, family, indoor, etc. 
+    Focus on:
+    - Main subjects and objects (one word each)
+    - Activities or actions (one word each)
+    - Setting and location (one word each)
+    - Colors and mood (one word each)
+    - Time of day or season (if apparent)
+    Provide ONLY a comma-separated list of simple tags, nothing else. 
+    Example format: restaurant, eating, family, indoor, casual, warm
+
+# Cache Configuration
+cache:
+  directory: "~/.smugvision/cache"   # Local image cache directory
+  clear_on_exit: false               # Automatically clear cache after processing
+  preserve_structure: true           # Mirror SmugMug folder structure in cache
+
+# Logging Configuration
+logging:
+  level: "INFO"                      # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "~/.smugvision/smugvision.log"  # Log file path
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Log message format
+
