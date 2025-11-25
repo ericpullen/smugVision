@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smugvision"
+version = "0.3.0"
+description = "AI-powered photo metadata generation for SmugMug using local vision models"
+readme = "README.md"
+authors = [
+    {name = "Eric Pullen", email = "eric@example.com"}
+]
+license = {text = "MIT"}
+keywords = [
+    "smugmug",
+    "ai",
+    "vision",
+    "metadata",
+    "photos",
+    "llama",
+    "face-recognition",
+    "computer-vision",
+    "photo-management",
+    "automation"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Utilities",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31.0",
+    "requests-oauthlib>=1.3.1",
+    "PyYAML>=6.0",
+    "Pillow>=10.0.0",
+    "ollama>=0.1.0",
+    "face-recognition>=1.3.0",
+    "pillow-heif>=0.13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "flake8>=6.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/smugvision"
+Documentation = "https://github.com/yourusername/smugvision/blob/main/README.md"
+Repository = "https://github.com/yourusername/smugvision"
+"Bug Tracker" = "https://github.com/yourusername/smugvision/issues"
+Changelog = "https://github.com/yourusername/smugvision/blob/main/CHANGELOG.md"
+
+[project.scripts]
+smugvision = "smugvision.__main__:main"
+smugvision-config = "smugvision.scripts.setup_config:main"
+smugvision-get-tokens = "smugvision.scripts.get_tokens:main"
+smugvision-optimize-faces = "smugvision.scripts.optimize_faces:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["smugvision*"]
+exclude = ["tests*", "scripts*"]
+
+[tool.setuptools.package-data]
+smugvision = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=smugvision --cov-report=term-missing"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+

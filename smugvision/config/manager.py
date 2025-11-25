@@ -212,6 +212,9 @@ class ConfigManager:
     def _merge_with_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
         """Merge loaded config with defaults to add any new fields.
         
+        User config values take precedence over defaults. This only adds
+        missing keys from defaults, never overwrites user values.
+        
         Args:
             config: Loaded configuration dictionary
             
@@ -219,15 +222,18 @@ class ConfigManager:
             Merged configuration with defaults
         """
         def deep_merge(base: dict, updates: dict) -> dict:
-            """Recursively merge two dictionaries."""
+            """Recursively merge two dictionaries, with updates taking precedence."""
             result = base.copy()
             for key, value in updates.items():
                 if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    # Both are dicts, merge recursively
                     result[key] = deep_merge(result[key], value)
-                elif key not in result:
+                else:
+                    # User value takes precedence (even if empty string)
                     result[key] = value
             return result
         
+        # Merge with user config taking precedence
         return deep_merge(DEFAULT_CONFIG, config)
     
     @staticmethod
