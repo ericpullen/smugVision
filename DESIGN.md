@@ -110,10 +110,10 @@ smugvision/
 ├── face/                    # ✅ IMPLEMENTED
 │   ├── __init__.py
 │   └── recognizer.py        # Face detection and recognition
-├── smugmug/
+├── smugmug/                 # ✅ IMPLEMENTED
 │   ├── __init__.py
 │   ├── client.py            # SmugMug API client wrapper
-│   ├── models.py            # Data models for Gallery, Image, etc.
+│   ├── models.py            # Data models for Album, AlbumImage
 │   └── exceptions.py        # Custom exceptions
 ├── vision/                  # ✅ IMPLEMENTED
 │   ├── __init__.py
@@ -121,7 +121,7 @@ smugvision/
 │   ├── llama.py             # Llama 3.2 Vision implementation
 │   ├── factory.py           # Factory pattern for model selection
 │   └── exceptions.py        # Custom exceptions for vision models
-├── cache/
+├── cache/                  # ✅ IMPLEMENTED
 │   ├── __init__.py
 │   └── manager.py           # Image cache management
 ├── processing/
@@ -499,26 +499,40 @@ logger.error(f"Failed to update image {image_id}: {error}", exc_info=True)
 
 ## Development Roadmap
 
-### Version 0.1.0 (MVP) - In Progress
-- [ ] Basic CLI interface
+### Version 0.1.0 (MVP) - Mostly Complete
+- [x] Production CLI interface (`__main__.py`)
 - [x] Config file loading and validation
 - [x] Configuration manager with interactive setup
 - [x] YAML configuration support
-- [ ] SmugMug API authentication
-- [ ] Single gallery image retrieval
-- [ ] Image cache management
+- [x] SmugMug API authentication (OAuth 1.0a)
+- [x] SmugMug API client wrapper
+- [x] Single gallery image retrieval
+- [x] Album and image data models
+- [x] Image cache management (download, organize, skip existing)
 - [x] Llama 3.2 Vision integration via Ollama
 - [x] Caption and tag generation
-- [ ] Metadata update to SmugMug
-- [ ] Marker tag system
+- [x] Metadata update to SmugMug (PATCH endpoint)
+- [x] Marker tag system (check and add tags)
+- [x] Image download from SmugMug (multiple sizes)
+- [x] Video download support with LargestVideo endpoint
+- [x] Video filtering (skip by default, optional include)
 - [x] Basic error handling and logging
 - [x] Vision model factory pattern
 - [x] Abstract base class for vision models
 - [x] Custom exceptions for vision models
+- [x] Custom exceptions for SmugMug API
+- [x] Album resolution from URLs, node IDs, and names
+- [x] Recursive album search within folder structures
+- [x] URL path resolution for folder navigation
+- [x] Pagination support for large result sets
+- [x] ImageProcessor orchestration class
+- [x] MetadataFormatter for combining AI and EXIF metadata
+- [x] End-to-end processing pipeline with statistics
+- [x] Test utilities (test_smugmug.py, test_processor.py, test_vision.py, debug_face_recognition.py)
 
-### Version 0.2.0
-- [ ] Force reprocessing flag
-- [ ] Preserve existing metadata
+### Version 0.2.0 - Complete ✓
+- [x] Force reprocessing flag
+- [x] Preserve existing metadata
 - [x] EXIF data extraction and integration
 - [x] EXIF orientation handling
 - [x] HEIC/HEIF image format support
@@ -526,25 +540,25 @@ logger.error(f"Failed to update image {image_id}: {error}", exc_info=True)
 - [x] Improved error messages
 - [ ] Unit tests for core modules
 
-### Version 0.3.0 - Partially Complete
+### Version 0.3.0 - Complete ✓
 - [x] Face detection and recognition system
 - [x] Reference faces management
-- [x] Person name identification
+- [x] Person name identification (with proper formatting)
 - [x] Relationship context integration
-- [ ] Folder processing support
-- [ ] Dry-run mode
-- [ ] Cache cleanup functionality
-- [ ] Progress indicators
+- [x] Dry-run mode
+- [x] Progress indicators and statistics
+- [ ] Folder processing support (planned for 1.0)
+- [ ] Cache cleanup functionality (planned for 1.0)
 - [ ] Integration tests
 
 ### Version 1.0.0
 - [ ] Complete documentation
-- [ ] Installation via pip
+- [x] Installation via pip
 - [ ] Comprehensive test coverage
 - [ ] Production-ready error handling
 - [ ] Performance optimizations
 
-### Completed Features (Not in Original Roadmap)
+### Completed Features (Beyond Original Roadmap)
 - [x] Advanced EXIF location extraction with venue search
 - [x] Overpass API integration for POI discovery
 - [x] Configurable geocoding with exclusion filters
@@ -557,6 +571,26 @@ logger.error(f"Failed to update image {image_id}: {error}", exc_info=True)
 - [x] Multi-format image support (JPEG, PNG, HEIC)
 - [x] Image scaling for performance optimization
 - [x] Comprehensive logging with module identification
+- [x] SmugMug URL parsing and album resolution
+- [x] Recursive folder navigation and album discovery
+- [x] Cache folder structure mirroring SmugMug hierarchy
+- [x] Multiple image size support (Thumb through X3Large, Original)
+- [x] Video file detection and separate handling
+- [x] Video download via LargestVideo API endpoint
+- [x] Configurable video inclusion/exclusion
+- [x] SmugMug API pagination for large datasets
+- [x] Node-based folder hierarchy navigation
+- [x] Test utilities for SmugMug integration (test_smugmug.py)
+- [x] Test utilities for full processing pipeline (test_processor.py)
+- [x] OAuth token acquisition helper (get_smugmug_tokens.py)
+- [x] Album discovery tool (find_album_key.py)
+- [x] Production-ready CLI with rich output formatting
+- [x] Batch processing statistics and reporting
+- [x] Dry-run mode with detailed preview output
+- [x] Person name formatting (converting underscores to spaces)
+- [x] Pip-installable package with pyproject.toml
+- [x] Console scripts: smugvision, smugvision-config, smugvision-get-tokens, smugvision-optimize-faces
+- [x] Organized project structure (tests/, scripts/ directories)
 
 ---
 
@@ -691,6 +725,125 @@ class MetadataResult:
     model_used: str
     processing_time: float  # seconds
 ```
+
+---
+
+## Current Status & Next Steps
+
+### What's Complete (Ready for Integration)
+
+**Infrastructure Layer:**
+- ✅ Configuration system with defaults, validation, and interactive setup
+- ✅ SmugMug API client with OAuth 1.0a authentication
+- ✅ Album/image retrieval with pagination and filtering
+- ✅ Image and video download with multiple size options
+- ✅ Local cache management with folder structure preservation
+- ✅ URL/path-based album resolution and folder navigation
+
+**AI/ML Layer:**
+- ✅ Vision model abstraction (factory pattern with base class)
+- ✅ Llama 3.2 Vision integration via Ollama
+- ✅ Caption and tag generation
+- ✅ EXIF data extraction with GPS and reverse geocoding
+- ✅ Face detection and recognition with configurable confidence
+- ✅ Person relationship management for context-aware captions
+
+**Data Layer:**
+- ✅ Album and AlbumImage data models
+- ✅ Metadata update to SmugMug (PATCH endpoint)
+- ✅ Marker tag system for tracking processed images
+- ✅ Custom exceptions for error handling
+
+### ✅ Processing Module - COMPLETE
+
+All core processing components are now implemented and tested:
+
+**Completed Components:**
+1. ✅ **`processing/processor.py`** - Main `ImageProcessor` orchestrator:
+   - Accepts album key/URL and processes all unprocessed images
+   - Downloads images to cache (using CacheManager)
+   - Extracts EXIF data and identifies faces
+   - Generates captions and tags (using VisionModel)
+   - Updates SmugMug with new metadata
+   - Adds marker tag to processed images
+   - Tracks progress and reports detailed statistics
+
+2. ✅ **`processing/metadata.py`** - `MetadataFormatter` utilities:
+   - Combines vision-generated captions with EXIF location data
+   - Merges person names from face recognition
+   - Handles metadata preservation (append vs replace)
+   - Formats tags and captions for SmugMug API
+
+3. ✅ **`__main__.py`** - Production CLI entry point:
+   - Parses command-line arguments
+   - Initializes configuration
+   - Creates processor instance
+   - Runs processing and displays rich formatted results
+   - Supports dry-run, force-reprocess, and video filtering
+
+### Recommended Next Steps
+
+**Phase 1: Testing & Documentation** ✅ **COMPLETE**
+1. ✅ Test with real albums (validated)
+2. ✅ Document CLI usage in README.md
+3. ✅ Create comprehensive documentation
+4. ✅ Add usage examples
+
+**Phase 2: Future Enhancements (Version 1.0+)**
+1. Folder batch processing (process entire folder trees)
+2. Cache cleanup utilities
+3. Unit and integration tests
+4. Performance optimizations (parallel downloads, batch API calls)
+
+**Phase 2: CLI Interface**
+1. Create `__main__.py` with argument parsing
+2. Add commands: `process`, `list`, `status`
+3. Support for `--gallery`, `--url`, `--node`, `--force-reprocess`
+4. Add `--dry-run` mode for preview
+5. Implement verbose logging flag
+
+**Phase 3: Testing & Refinement**
+1. Test with real SmugMug galleries
+2. Handle edge cases (no faces, no EXIF, processing errors)
+3. Optimize for performance (parallel downloads, batch updates)
+4. Add progress bars and ETA
+5. Write unit tests for processor
+
+**Phase 4: Documentation & Packaging**
+1. Complete README with usage examples
+2. Add troubleshooting guide
+3. Create setup.py for pip installation
+4. Add example configurations
+
+### Design Considerations for Processor
+
+**Processing Flow:**
+```
+For each image in album:
+  1. Check if already processed (marker tag) → skip if yes
+  2. Download to cache (skip if cached)
+  3. Extract EXIF data (GPS, camera info, date)
+  4. Detect and identify faces (if enabled)
+  5. Generate caption with vision model
+  6. Generate tags with vision model
+  7. Format metadata (merge person names, location)
+  8. Update SmugMug via PATCH API
+  9. Add marker tag
+  10. Log results and metrics
+```
+
+**Error Handling Strategy:**
+- Continue processing on single image failure
+- Log errors with full context
+- Collect statistics (success/skip/error counts)
+- Display summary at end
+- Option for `--stop-on-error` for strict mode
+
+**Performance Optimizations:**
+- Cache downloaded images (already implemented)
+- Reuse face encodings across images
+- Batch SmugMug updates where possible
+- Show progress with ETA
 
 ---
 

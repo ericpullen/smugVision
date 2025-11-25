@@ -1,0 +1,29 @@
+# Include documentation files
+include README.md
+include LICENSE
+include QUICKSTART.md
+include CHANGELOG.md
+include DESIGN.md
+include requirements.txt
+include config.yaml.example
+
+# Include specific documentation
+include README_FACE_RECOGNITION.md
+include README_SMUGMUG_TESTING.md
+include TIMING_ANALYSIS.md
+
+# Include all Python files in the package
+recursive-include smugvision *.py
+
+# Exclude test and build artifacts
+exclude *.pyc
+exclude .DS_Store
+recursive-exclude __pycache__ *
+recursive-exclude *.egg-info *
+recursive-exclude build *
+recursive-exclude dist *
+
+# Exclude development files
+exclude .gitignore
+exclude .git
+
