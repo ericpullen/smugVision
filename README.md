@@ -479,6 +479,7 @@ This project is licensed under the MIT License - see the [`LICENSE`](LICENSE) fi
 - **Documentation**: [`DESIGN.md`](DESIGN.md) for architecture details
 - **Face Recognition Guide**: [`README_FACE_RECOGNITION.md`](README_FACE_RECOGNITION.md)
 
+
 ---
 
 **Built with ❤️ for photographers who love automation**
