@@ -33,6 +33,15 @@ class ProcessingResult:
         faces_detected: Number of faces detected
         processing_time: Time taken to process (seconds)
         error: Error message if failed
+        
+        # Detailed results for UI/inspection
+        current_caption: Original caption before processing
+        current_keywords: Original keywords before processing
+        proposed_caption: Generated caption (what was/would be written)
+        proposed_keywords: Generated keywords (what was/would be written)
+        detected_faces: List of person names detected
+        location: Resolved location string
+        location_aliases: Location aliases for tags
     """
     image_key: str
     filename: str
@@ -43,6 +52,15 @@ class ProcessingResult:
     faces_detected: int = 0
     processing_time: float = 0.0
     error: Optional[str] = None
+    
+    # Detailed results for UI/inspection
+    current_caption: Optional[str] = None
+    current_keywords: Optional[List[str]] = None
+    proposed_caption: Optional[str] = None
+    proposed_keywords: Optional[List[str]] = None
+    detected_faces: Optional[List[str]] = None
+    location: Optional[str] = None
+    location_aliases: Optional[List[str]] = None
 
 
 @dataclass
@@ -147,9 +165,21 @@ class ImageProcessor:
                     # Expand ~ and convert to absolute path
                     reference_faces_path = PathLib(reference_faces_dir).expanduser()
                     
+                    # Get cache settings
+                    use_cache = config.get("face_recognition.use_cache", True)
+                    cache_dir = config.get(
+                        "face_recognition.cache_dir",
+                        "~/.smugvision/cache/face_encodings"
+                    )
+                    cache_dir_path = PathLib(cache_dir).expanduser()
+                    
                     # Only initialize if directory exists
                     if reference_faces_path.exists():
-                        self.face_recognizer = FaceRecognizer(str(reference_faces_path))
+                        self.face_recognizer = FaceRecognizer(
+                            str(reference_faces_path),
+                            cache_dir=str(cache_dir_path),
+                            use_cache=use_cache
+                        )
                         logger.info(f"Face recognition enabled with {len(self.face_recognizer.reference_faces)} person(s)")
                     else:
                         logger.info(f"Face recognition disabled: reference faces directory not found at {reference_faces_path}")
@@ -267,7 +297,9 @@ class ImageProcessor:
         result = ProcessingResult(
             image_key=image.image_key,
             filename=image.file_name,
-            success=False
+            success=False,
+            current_caption=image.caption,
+            current_keywords=list(image.keywords) if image.keywords else [],
         )
         
         try:
@@ -380,7 +412,8 @@ class ImageProcessor:
             logger.debug("Generating caption")
             caption_prompt = self._build_caption_prompt(
                 location=location_string,
-                person_names=person_names
+                person_names=person_names,
+                album_name=album.name
             )
             ai_caption = self.vision.generate_caption(
                 image_path=str(image_path),
@@ -391,7 +424,8 @@ class ImageProcessor:
             logger.debug("Generating tags")
             tags_prompt = self._build_tags_prompt(
                 location=location_string,
-                person_names=person_names
+                person_names=person_names,
+                album_name=album.name
             )
             ai_tags = self.vision.generate_tags(
                 image_path=str(image_path),
@@ -421,6 +455,13 @@ class ImageProcessor:
                 person_names=person_names,
                 location_tags=location_tags
             )
+            
+            # Store the generated metadata in the result for inspection/UI
+            result.proposed_caption = final_caption
+            result.proposed_keywords = final_tags
+            result.detected_faces = person_names
+            result.location = location_string
+            result.location_aliases = location_aliases
             
             # Update SmugMug
             if not self.dry_run:
@@ -480,13 +521,15 @@ class ImageProcessor:
     def _build_caption_prompt(
         self,
         location: Optional[str] = None,
-        person_names: Optional[List[str]] = None
+        person_names: Optional[List[str]] = None,
+        album_name: Optional[str] = None
     ) -> str:
         """Build caption prompt with context.
         
         Args:
             location: Location string from EXIF
             person_names: Identified person names
+            album_name: Name of the album this image belongs to
             
         Returns:
             Enhanced prompt string
@@ -498,12 +541,20 @@ class ImageProcessor:
         
         context_parts = []
         
+        if album_name:
+            context_parts.append(
+                f"Album name: {album_name}\n"
+                f"(The album name often describes the event, occasion, or subject - "
+                f"e.g., pet names, birthdays, trips, celebrations. Use this context "
+                f"to inform your caption.)"
+            )
+        
         if location:
-            context_parts.append(f"This photo was taken at: {location}")
+            context_parts.append(f"Location: {location}")
         
         if person_names:
             names_str = ", ".join(person_names)
-            context_parts.append(f"People in photo: {names_str}")
+            context_parts.append(f"People identified: {names_str}")
         
         if context_parts:
             context = "\n".join(context_parts)
@@ -514,13 +565,15 @@ class ImageProcessor:
     def _build_tags_prompt(
         self,
         location: Optional[str] = None,
-        person_names: Optional[List[str]] = None
+        person_names: Optional[List[str]] = None,
+        album_name: Optional[str] = None
     ) -> str:
         """Build tags prompt with context.
         
         Args:
             location: Location string from EXIF
             person_names: Identified person names
+            album_name: Name of the album this image belongs to
             
         Returns:
             Enhanced prompt string
@@ -531,6 +584,11 @@ class ImageProcessor:
         )
         
         context_parts = []
+        
+        if album_name:
+            context_parts.append(
+                f"Album: {album_name} (may contain event/occasion info like pet names, birthdays, trips)"
+            )
         
         if location:
             context_parts.append(f"Location: {location}")
