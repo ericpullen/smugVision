@@ -41,6 +41,13 @@ DEFAULT_CONFIG = {
         "use_exif_location": True,
     },
     
+    # Location Resolution Configuration
+    "location": {
+        "custom_locations_file": str(Path.home() / ".smugvision" / "locations.yaml"),
+        "check_custom_first": True,
+        "use_aliases_as_tags": True,
+    },
+    
     # Prompt Configuration
     "prompts": {
         "caption": (

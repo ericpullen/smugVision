@@ -47,6 +47,7 @@ dependencies = [
     "ollama>=0.1.0",
     "face-recognition>=1.3.0",
     "pillow-heif>=0.13.0",
+    "flask>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +71,7 @@ smugvision = "smugvision.__main__:main"
 smugvision-config = "smugvision.scripts.setup_config:main"
 smugvision-get-tokens = "smugvision.scripts.get_tokens:main"
 smugvision-optimize-faces = "smugvision.scripts.optimize_faces:main"
+smugvision-web = "smugvision.web.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

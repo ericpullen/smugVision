@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+
+{% block title %}smugVision - Preview Results{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1 id="album-title">Loading...</h1>
+        <p id="album-stats"></p>
+    </header>
+    
+    <!-- Summary stats -->
+    <div id="summary-section" class="hidden">
+        <div class="grid">
+            <div class="stat-card">
+                <strong id="stat-processed">0</strong>
+                <span>Processed</span>
+            </div>
+            <div class="stat-card">
+                <strong id="stat-skipped">0</strong>
+                <span>Skipped</span>
+            </div>
+            <div class="stat-card">
+                <strong id="stat-errors">0</strong>
+                <span>Errors</span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Commit button -->
+    <div id="commit-section" class="hidden">
+        <button id="commit-btn" class="contrast">
+            Commit All Changes to SmugMug
+        </button>
+        <p class="help-text">This will update all processed images with the proposed metadata.</p>
+    </div>
+</article>
+
+<!-- Image grid -->
+<div id="image-grid" class="image-grid">
+    <p id="loading-message">Loading preview results...</p>
+</div>
+
+<!-- Commit result modal -->
+<dialog id="commit-modal">
+    <article>
+        <header>
+            <h3>Commit Complete</h3>
+        </header>
+        <p id="commit-result"></p>
+        <footer>
+            <button id="close-modal-btn">Close</button>
+        </footer>
+    </article>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const jobId = '{{ job_id }}';
+    
+    loadPreviewResults(jobId);
+    
+    // Commit button handler
+    document.getElementById('commit-btn').addEventListener('click', function() {
+        commitChanges(jobId);
+    });
+    
+    // Modal close handler
+    document.getElementById('close-modal-btn').addEventListener('click', function() {
+        document.getElementById('commit-modal').close();
+    });
+});
+
+async function loadPreviewResults(jobId) {
+    try {
+        const response = await fetch(`/api/preview/results?job_id=${jobId}`);
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to load results');
+        }
+        
+        // Update header
+        document.getElementById('album-title').textContent = data.album_name;
+        document.getElementById('album-stats').textContent = 
+            `${data.stats.total} images total`;
+        
+        // Update stats
+        document.getElementById('stat-processed').textContent = data.stats.processed;
+        document.getElementById('stat-skipped').textContent = data.stats.skipped;
+        document.getElementById('stat-errors').textContent = data.stats.errors;
+        document.getElementById('summary-section').classList.remove('hidden');
+        
+        // Show commit button if there are processed images
+        if (data.stats.processed > 0) {
+            document.getElementById('commit-section').classList.remove('hidden');
+        }
+        
+        // Render images
+        renderImageGrid(data.images);
+        
+    } catch (error) {
+        document.getElementById('loading-message').textContent = 
+            `Error: ${error.message}`;
+    }
+}
+
+function renderImageGrid(images) {
+    const grid = document.getElementById('image-grid');
+    grid.innerHTML = '';
+    
+    if (!images || images.length === 0) {
+        grid.innerHTML = '<p>No images to display.</p>';
+        return;
+    }
+    
+    images.forEach(image => {
+        const card = createImageCard(image);
+        grid.appendChild(card);
+    });
+}
+
+function createImageCard(image) {
+    const card = document.createElement('article');
+    card.className = `image-card ${image.status}`;
+    
+    // Status badge
+    const statusBadge = document.createElement('span');
+    statusBadge.className = `status-badge ${image.status}`;
+    statusBadge.textContent = image.status.toUpperCase();
+    
+    // Thumbnail
+    const thumbnail = document.createElement('img');
+    thumbnail.src = image.thumbnail_url;
+    thumbnail.alt = image.filename;
+    thumbnail.className = 'thumbnail';
+    thumbnail.loading = 'lazy';
+    
+    // Filename
+    const filename = document.createElement('h4');
+    filename.textContent = image.filename;
+    
+    // Content container
+    const content = document.createElement('div');
+    content.className = 'card-content';
+    
+    if (image.status === 'skipped') {
+        // Skipped images show minimal info
+        const reason = document.createElement('p');
+        reason.className = 'skip-reason';
+        reason.textContent = image.skip_reason || 'Already processed';
+        content.appendChild(reason);
+        
+        if (image.current.caption) {
+            const caption = document.createElement('p');
+            caption.className = 'existing-caption';
+            caption.innerHTML = `<small><strong>Current:</strong> ${escapeHtml(image.current.caption)}</small>`;
+            content.appendChild(caption);
+        }
+        
+    } else if (image.status === 'error') {
+        // Error images show the error
+        const error = document.createElement('p');
+        error.className = 'error-message';
+        error.textContent = image.error || 'Unknown error';
+        content.appendChild(error);
+        
+    } else {
+        // Processed images show diff
+        
+        // Caption diff
+        const captionSection = document.createElement('div');
+        captionSection.className = 'diff-section';
+        captionSection.innerHTML = '<strong>Caption:</strong>';
+        
+        const captionDiff = createDiff(
+            image.current.caption,
+            image.proposed.caption
+        );
+        captionSection.appendChild(captionDiff);
+        content.appendChild(captionSection);
+        
+        // Keywords diff
+        const keywordsSection = document.createElement('div');
+        keywordsSection.className = 'diff-section';
+        keywordsSection.innerHTML = '<strong>Keywords:</strong>';
+        
+        const keywordsDiff = createKeywordsDiff(
+            image.current.keywords || [],
+            image.proposed.keywords || []
+        );
+        keywordsSection.appendChild(keywordsDiff);
+        content.appendChild(keywordsSection);
+        
+        // Details (faces, location)
+        if (image.details.faces_detected.length > 0 || image.details.location) {
+            const details = document.createElement('div');
+            details.className = 'details-section';
+            
+            if (image.details.faces_detected.length > 0) {
+                const faces = document.createElement('span');
+                faces.className = 'detail-item faces';
+                faces.innerHTML = `👤 ${image.details.faces_detected.join(', ')}`;
+                details.appendChild(faces);
+            }
+            
+            if (image.details.location) {
+                const location = document.createElement('span');
+                location.className = 'detail-item location';
+                location.innerHTML = `📍 ${escapeHtml(image.details.location)}`;
+                details.appendChild(location);
+            }
+            
+            content.appendChild(details);
+        }
+    }
+    
+    // Assemble card
+    card.appendChild(statusBadge);
+    card.appendChild(thumbnail);
+    card.appendChild(filename);
+    card.appendChild(content);
+    
+    return card;
+}
+
+function createDiff(oldText, newText) {
+    const container = document.createElement('div');
+    container.className = 'diff-container';
+    
+    if (!oldText && !newText) {
+        container.innerHTML = '<span class="no-change">No caption</span>';
+        return container;
+    }
+    
+    if (!oldText) {
+        // All new
+        const added = document.createElement('div');
+        added.className = 'diff-added';
+        added.textContent = newText;
+        container.appendChild(added);
+    } else if (oldText === newText) {
+        // No change
+        const noChange = document.createElement('div');
+        noChange.className = 'no-change';
+        noChange.textContent = oldText;
+        container.appendChild(noChange);
+    } else {
+        // Show old and new
+        if (oldText) {
+            const removed = document.createElement('div');
+            removed.className = 'diff-removed';
+            removed.textContent = '- ' + oldText;
+            container.appendChild(removed);
+        }
+        
+        const added = document.createElement('div');
+        added.className = 'diff-added';
+        added.textContent = '+ ' + newText;
+        container.appendChild(added);
+    }
+    
+    return container;
+}
+
+function createKeywordsDiff(oldKeywords, newKeywords) {
+    const container = document.createElement('div');
+    container.className = 'keywords-container';
+    
+    const oldSet = new Set(oldKeywords.map(k => k.toLowerCase()));
+    const newSet = new Set(newKeywords.map(k => k.toLowerCase()));
+    
+    // Show all keywords with appropriate styling
+    newKeywords.forEach(keyword => {
+        const tag = document.createElement('span');
+        tag.className = 'keyword-tag';
+        
+        if (!oldSet.has(keyword.toLowerCase())) {
+            tag.classList.add('added');
+            tag.textContent = '+ ' + keyword;
+        } else {
+            tag.textContent = keyword;
+        }
+        
+        container.appendChild(tag);
+    });
+    
+    // Show removed keywords
+    oldKeywords.forEach(keyword => {
+        if (!newSet.has(keyword.toLowerCase())) {
+            const tag = document.createElement('span');
+            tag.className = 'keyword-tag removed';
+            tag.textContent = '- ' + keyword;
+            container.appendChild(tag);
+        }
+    });
+    
+    return container;
+}
+
+async function commitChanges(jobId) {
+    const btn = document.getElementById('commit-btn');
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'Committing...';
+    
+    try {
+        const response = await fetch('/api/commit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({job_id: jobId})
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to commit changes');
+        }
+        
+        // Show result modal
+        const resultText = document.getElementById('commit-result');
+        if (data.errors === 0) {
+            resultText.textContent = `Successfully committed ${data.committed} images to SmugMug!`;
+        } else {
+            resultText.textContent = `Committed ${data.committed} images with ${data.errors} errors.`;
+        }
+        
+        document.getElementById('commit-modal').showModal();
+        
+        // Update button
+        btn.textContent = '✓ Changes Committed';
+        btn.classList.add('committed');
+        
+    } catch (error) {
+        alert('Error: ' + error.message);
+        btn.disabled = false;
+        btn.removeAttribute('aria-busy');
+        btn.textContent = 'Commit All Changes to SmugMug';
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

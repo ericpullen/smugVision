@@ -42,6 +42,15 @@ processing:
   image_size: "medium"               # Download size from SmugMug (small, medium, large, etc.)
   use_exif_location: true            # Extract and use GPS location from EXIF
 
+# Location Resolution Configuration
+# Custom locations allow you to define friendly names for places like your home,
+# relatives' houses, or frequently visited locations. These override reverse geocoding.
+# See locations.yaml.example for the custom locations file format.
+location:
+  custom_locations_file: "~/.smugvision/locations.yaml"  # Path to custom locations file
+  check_custom_first: true           # Check custom locations before reverse geocoding
+  use_aliases_as_tags: true          # Add location aliases as keyword tags
+
 # Prompt Configuration
 # Customize these prompts to change how the AI describes your images
 prompts:

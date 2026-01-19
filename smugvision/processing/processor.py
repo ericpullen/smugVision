@@ -12,7 +12,7 @@ from ..smugmug.exceptions import SmugMugError
 from ..cache import CacheManager
 from ..vision import VisionModelFactory
 from ..vision.base import VisionModel
-from ..utils.exif import extract_exif_location, reverse_geocode
+from ..utils.exif import extract_exif_location, reverse_geocode, resolve_location_with_custom
 from ..face.recognizer import FaceRecognizer
 from .metadata import MetadataFormatter
 
@@ -294,16 +294,76 @@ class ImageProcessor:
             if not image_path.exists():
                 raise ValueError(f"Failed to download image: {image.file_name}")
             
-            # Extract EXIF location data
-            logger.debug("Extracting EXIF data")
-            exif_location = extract_exif_location(str(image_path))
+            # Get GPS coordinates - prefer SmugMug API data over EXIF from downloaded file
+            # (SmugMug strips GPS from downloaded images for privacy, but provides it via API)
+            latitude = None
+            longitude = None
+            gps_source = None
+            exif_location = None
             
-            # Get location string with reverse geocoding if coordinates available
+            if image.has_gps:
+                # Use GPS data from SmugMug API
+                latitude = image.latitude
+                longitude = image.longitude
+                gps_source = "SmugMug API"
+                logger.debug(f"  GPS from SmugMug API: {latitude:.6f}, {longitude:.6f}")
+            else:
+                # Fall back to EXIF extraction from downloaded file
+                logger.debug("Extracting EXIF data from downloaded file")
+                exif_location = extract_exif_location(str(image_path))
+                if exif_location.has_coordinates:
+                    latitude = exif_location.latitude
+                    longitude = exif_location.longitude
+                    gps_source = "EXIF"
+                    logger.debug(f"  GPS from EXIF: {latitude:.6f}, {longitude:.6f}")
+            
+            # Get location string with custom locations and reverse geocoding
             location_string = None
-            if exif_location.has_coordinates:
-                if self.config.get("exif.enable_geocoding", True):
-                    exif_location = reverse_geocode(exif_location, self.config)
-                location_string = exif_location.location_name
+            location_aliases = []
+            is_custom = False
+            
+            if latitude is not None and longitude is not None:
+                logger.info(
+                    f"  GPS coordinates ({gps_source}): {latitude:.6f}, {longitude:.6f}"
+                )
+                if self.config.get("processing.use_exif_location", True):
+                    # Use the new unified location resolution
+                    check_custom = self.config.get("location.check_custom_first", True)
+                    custom_file = self.config.get("location.custom_locations_file")
+                    
+                    location_string, location_aliases, is_custom = resolve_location_with_custom(
+                        latitude,
+                        longitude,
+                        check_custom_first=check_custom,
+                        custom_locations_file=custom_file,
+                        interactive=False
+                    )
+                    
+                    if is_custom:
+                        logger.info(f"  Location (custom): {location_string}")
+                        if location_aliases:
+                            logger.info(f"  Location aliases: {', '.join(location_aliases)}")
+                    elif location_string:
+                        logger.info(f"  Location (geocoded): {location_string}")
+                    else:
+                        logger.info("  Location: Could not resolve location name")
+            else:
+                logger.debug("  No GPS coordinates available")
+            
+            # Create exif_location object for downstream use (for location tags extraction)
+            if exif_location is None:
+                # We got GPS from SmugMug API, create a minimal ExifLocation object
+                from ..utils.exif import ExifLocation
+                exif_location = ExifLocation(
+                    latitude=latitude,
+                    longitude=longitude,
+                    has_coordinates=(latitude is not None and longitude is not None)
+                )
+            
+            # Update with resolved location data
+            exif_location.location_name = location_string
+            exif_location.location_aliases = location_aliases
+            exif_location.is_custom_location = is_custom
             
             # Detect and identify faces
             person_names = []
@@ -346,7 +406,15 @@ class ImageProcessor:
                 person_names=person_names
             )
             
+            # Extract location tags, including aliases from custom locations
             location_tags = self._extract_location_tags(exif_location) if exif_location.has_coordinates else None
+            
+            # Add location aliases as tags if configured
+            if self.config.get("location.use_aliases_as_tags", True) and location_aliases:
+                if location_tags is None:
+                    location_tags = []
+                location_tags.extend(location_aliases)
+            
             final_tags = self.formatter.format_tags(
                 ai_tags=ai_tags,
                 existing_tags=image.keywords,

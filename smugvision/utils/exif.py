@@ -1,10 +1,10 @@
 """EXIF data extraction utilities for images."""
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import radians, cos, sin, asin, sqrt
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from PIL import Image
 from PIL.ExifTags import GPS, TAGS
@@ -27,13 +27,17 @@ class ExifLocation:
     Attributes:
         latitude: Latitude in decimal degrees
         longitude: Longitude in decimal degrees
-        location_name: Human-readable location name (from reverse geocoding)
+        location_name: Human-readable location name (from reverse geocoding or custom locations)
         has_coordinates: Whether GPS coordinates are available
+        is_custom_location: Whether the location was resolved from custom locations file
+        location_aliases: Additional names/tags for the location (from custom locations)
     """
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     location_name: Optional[str] = None
     has_coordinates: bool = False
+    is_custom_location: bool = False
+    location_aliases: List[str] = field(default_factory=list)
     
     def __str__(self) -> str:
         """Return location as a formatted string."""
@@ -667,4 +671,120 @@ def reverse_geocode(
         return None
     
     return None
+
+
+def resolve_location_with_custom(
+    latitude: float,
+    longitude: float,
+    check_custom_first: bool = True,
+    custom_locations_file: Optional[str] = None,
+    interactive: bool = False
+) -> Tuple[Optional[str], List[str], bool]:
+    """Resolve GPS coordinates to a location name, checking custom locations first.
+    
+    This function provides a unified location resolution that:
+    1. First checks custom locations defined in the locations.yaml file
+    2. Falls back to reverse geocoding via Nominatim/Overpass if no custom match
+    
+    Args:
+        latitude: Latitude in decimal degrees
+        longitude: Longitude in decimal degrees
+        check_custom_first: If True, check custom locations before geocoding
+        custom_locations_file: Optional path to custom locations YAML file
+        interactive: If True, prompt user for venue selection during geocoding
+        
+    Returns:
+        Tuple of (location_name, aliases, is_custom_location):
+        - location_name: Human-readable location string or None
+        - aliases: List of location aliases (empty if not from custom locations)
+        - is_custom_location: True if resolved from custom locations file
+        
+    Examples:
+        >>> name, aliases, is_custom = resolve_location_with_custom(38.123, -85.654)
+        >>> if is_custom:
+        ...     print(f"Custom location: {name}, aliases: {aliases}")
+        ... else:
+        ...     print(f"Geocoded location: {name}")
+    """
+    # Try custom locations first
+    if check_custom_first:
+        try:
+            from smugvision.utils.locations import resolve_location, get_resolver
+            
+            # Log that we're checking custom locations
+            resolver = get_resolver(custom_locations_file)
+            if resolver.location_count > 0:
+                logger.debug(
+                    f"Checking {resolver.location_count} custom location(s) from {resolver.locations_file}"
+                )
+            
+            match = resolve_location(latitude, longitude, custom_locations_file)
+            if match:
+                logger.debug(
+                    f"Custom location match: '{match.name}' "
+                    f"(distance: {match.distance:.1f}m from center)"
+                )
+                return match.name, match.aliases, True
+            elif resolver.location_count > 0:
+                logger.debug(
+                    f"No custom location match for coordinates "
+                    f"({latitude:.6f}, {longitude:.6f}), falling back to geocoding"
+                )
+        except ImportError:
+            logger.debug("Custom locations module not available")
+        except Exception as e:
+            logger.warning(f"Error checking custom locations: {e}")
+    
+    # Fall back to reverse geocoding
+    logger.debug("Using reverse geocoding for location resolution")
+    location_name = reverse_geocode(latitude, longitude, interactive=interactive)
+    return location_name, [], False
+
+
+def get_location_for_image(
+    image_path: str,
+    check_custom_first: bool = True,
+    custom_locations_file: Optional[str] = None,
+    interactive: bool = False
+) -> ExifLocation:
+    """Extract EXIF location and resolve to a human-readable name.
+    
+    This is a convenience function that combines EXIF extraction with
+    location resolution (including custom locations).
+    
+    Args:
+        image_path: Path to the image file
+        check_custom_first: If True, check custom locations before geocoding
+        custom_locations_file: Optional path to custom locations YAML file
+        interactive: If True, prompt user for venue selection
+        
+    Returns:
+        ExifLocation object with coordinates and resolved location name
+        
+    Examples:
+        >>> location = get_location_for_image("photo.jpg")
+        >>> print(f"Photo taken at: {location}")
+        >>> if location.is_custom_location:
+        ...     print(f"Aliases: {location.location_aliases}")
+    """
+    # Extract GPS coordinates from EXIF
+    location = extract_exif_location(image_path)
+    
+    if not location.has_coordinates:
+        return location
+    
+    # Resolve coordinates to location name
+    name, aliases, is_custom = resolve_location_with_custom(
+        location.latitude,
+        location.longitude,
+        check_custom_first=check_custom_first,
+        custom_locations_file=custom_locations_file,
+        interactive=interactive
+    )
+    
+    location.location_name = name
+    location.location_aliases = aliases
+    location.is_custom_location = is_custom
+    
+    return location
 

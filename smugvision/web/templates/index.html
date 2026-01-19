@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+
+{% block title %}smugVision - Process Album{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1>Process SmugMug Album</h1>
+        <p>Enter a SmugMug album URL to preview AI-generated metadata changes.</p>
+    </header>
+    
+    <form id="preview-form">
+        <label for="album-url">
+            SmugMug Album URL
+            <input 
+                type="url" 
+                id="album-url" 
+                name="url" 
+                placeholder="https://yoursite.smugmug.com/.../n-XXXXX/album-name"
+                required
+            >
+        </label>
+        
+        <label for="force-reprocess">
+            <input type="checkbox" id="force-reprocess" name="force_reprocess">
+            Force reprocess images with existing marker tag
+        </label>
+        
+        <button type="submit" id="preview-btn">Preview Changes</button>
+    </form>
+    
+    <!-- Status section (hidden initially) -->
+    <div id="status-section" class="hidden">
+        <h3 id="status-title">Processing...</h3>
+        <progress id="progress-bar" value="0" max="100"></progress>
+        <p id="status-text">Initializing...</p>
+    </div>
+    
+    <!-- Error section (hidden initially) -->
+    <div id="error-section" class="hidden" role="alert">
+        <h4>Error</h4>
+        <p id="error-message"></p>
+    </div>
+</article>
+
+<!-- Service Status -->
+<article>
+    <header>
+        <h3>Service Status</h3>
+    </header>
+    <div id="service-status">
+        <p>Loading...</p>
+    </div>
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('preview-form');
+    const statusSection = document.getElementById('status-section');
+    const statusTitle = document.getElementById('status-title');
+    const statusText = document.getElementById('status-text');
+    const progressBar = document.getElementById('progress-bar');
+    const errorSection = document.getElementById('error-section');
+    const errorMessage = document.getElementById('error-message');
+    const previewBtn = document.getElementById('preview-btn');
+    
+    // Load service status
+    loadServiceStatus();
+    
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const url = document.getElementById('album-url').value;
+        const forceReprocess = document.getElementById('force-reprocess').checked;
+        
+        // Reset UI
+        errorSection.classList.add('hidden');
+        statusSection.classList.remove('hidden');
+        statusTitle.textContent = 'Creating preview job...';
+        statusText.textContent = 'Connecting to SmugMug...';
+        progressBar.value = 0;
+        previewBtn.disabled = true;
+        previewBtn.setAttribute('aria-busy', 'true');
+        
+        try {
+            // Create preview job
+            const response = await fetch('/api/preview', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({url, force_reprocess: forceReprocess})
+            });
+            
+            const data = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to create preview job');
+            }
+            
+            statusTitle.textContent = `Processing: ${data.album_name}`;
+            statusText.textContent = `0 / ${data.total_images} images`;
+            
+            // Connect to SSE for progress
+            const eventSource = new EventSource(
+                `/api/preview/status?job_id=${data.job_id}&force_reprocess=${forceReprocess}`
+            );
+            
+            eventSource.addEventListener('progress', function(e) {
+                const progress = JSON.parse(e.data);
+                progressBar.value = progress.percent;
+                statusText.textContent = `${progress.current} / ${progress.total}: ${progress.filename}`;
+            });
+            
+            eventSource.addEventListener('complete', function(e) {
+                const result = JSON.parse(e.data);
+                eventSource.close();
+                
+                // Redirect to preview page
+                window.location.href = `/preview/${data.job_id}`;
+            });
+            
+            eventSource.addEventListener('error', function(e) {
+                if (e.data) {
+                    const error = JSON.parse(e.data);
+                    showError(error.message);
+                }
+                eventSource.close();
+                resetForm();
+            });
+            
+            eventSource.onerror = function(e) {
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    return; // Normal close
+                }
+                showError('Connection lost. Please try again.');
+                eventSource.close();
+                resetForm();
+            };
+            
+        } catch (error) {
+            showError(error.message);
+            resetForm();
+        }
+    });
+    
+    function showError(message) {
+        errorSection.classList.remove('hidden');
+        errorMessage.textContent = message;
+        statusSection.classList.add('hidden');
+    }
+    
+    function resetForm() {
+        previewBtn.disabled = false;
+        previewBtn.removeAttribute('aria-busy');
+    }
+    
+    async function loadServiceStatus() {
+        const statusDiv = document.getElementById('service-status');
+        
+        try {
+            const response = await fetch('/api/status');
+            const status = await response.json();
+            
+            let html = '<dl>';
+            
+            // SmugMug status
+            const smugmugOk = status.smugmug === 'connected';
+            html += `<dt>SmugMug</dt>
+                     <dd class="${smugmugOk ? 'status-ok' : 'status-error'}">
+                         ${smugmugOk ? '✓' : '✗'} ${status.smugmug}
+                     </dd>`;
+            
+            // Vision model status
+            const visionOk = status.vision_model && status.vision_model.includes('connected');
+            html += `<dt>Vision Model</dt>
+                     <dd class="${visionOk ? 'status-ok' : 'status-warn'}">
+                         ${visionOk ? '✓' : '⚠'} ${status.vision_model}
+                     </dd>`;
+            
+            // Face recognition status
+            const faceOk = status.face_recognition && status.face_recognition.includes('enabled');
+            html += `<dt>Face Recognition</dt>
+                     <dd class="${faceOk ? 'status-ok' : 'status-info'}">
+                         ${faceOk ? '✓' : 'ℹ'} ${status.face_recognition}
+                     </dd>`;
+            
+            html += '</dl>';
+            statusDiv.innerHTML = html;
+            
+        } catch (error) {
+            statusDiv.innerHTML = `<p class="status-error">Failed to load status: ${error.message}</p>`;
+        }
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,76 @@
+# smugVision Custom Location Reference File
+#
+# This file allows you to define custom locations that will be used
+# instead of reverse geocoding when photos are taken within the
+# specified radius of each location.
+#
+# Copy this file to ~/.smugvision/locations.yaml and customize:
+#   mkdir -p ~/.smugvision
+#   cp locations.yaml.example ~/.smugvision/locations.yaml
+#
+# Why use custom locations?
+# - Get friendly names for places like "Eric's House" instead of just the street address
+# - Ensure consistent naming across all photos taken at the same location
+# - Faster processing (no API calls needed for custom locations)
+# - Add searchable aliases as tags
+#
+# How to find GPS coordinates:
+# - Google Maps: Right-click on a location and select the coordinates
+# - Apple Maps: Drop a pin and tap the info button
+# - From a photo: Use 'exiftool -GPSLatitude -GPSLongitude photo.jpg'
+#
+# Fields:
+#   name (required): The name you want displayed for this location
+#   latitude (required): GPS latitude in decimal degrees
+#   longitude (required): GPS longitude in decimal degrees
+#   radius (optional): Match radius in meters (default: 50)
+#                      Photos within this distance will match this location
+#   address (optional): Street address for your reference
+#   aliases (optional): Additional names to add as keyword tags
+
+locations:
+  # Example: Your home
+  - name: "My House"
+    latitude: 38.255582
+    longitude: -85.770201
+    radius: 50
+    address: "1135 W Jefferson St, Louisville, KY 40203"
+    aliases:
+      - "Home"
+  
+  # Example: A relative's house
+  - name: "Mom's House"
+    latitude: 38.234567
+    longitude: -85.765432
+    radius: 75
+    address: "123 Main Street, Louisville, KY 40205"
+    aliases:
+      - "Grandma's House"
+      - "Smith Residence"
+  
+  # Example: A venue with a larger radius
+  - name: "Louisville Slugger Field"
+    latitude: 38.256510
+    longitude: -85.747476
+    radius: 200
+    aliases:
+      - "Bats Game"
+      - "Baseball Stadium"
+  
+  # Example: Vacation home (just name and coordinates)
+  - name: "Beach House"
+    latitude: 30.123456
+    longitude: -87.654321
+    radius: 100
+
+  # Example: Using address only for reference
+  - name: "Work Office"
+    latitude: 38.345678
+    longitude: -85.567890
+    address: "456 Corporate Drive, Suite 200"
+
+# Tips:
+# - Use a smaller radius (25-50m) for precise locations like your house
+# - Use a larger radius (100-300m) for venues, parks, or large properties
+# - If multiple locations overlap, the closest match wins
+# - Coordinates are checked before any reverse geocoding API calls

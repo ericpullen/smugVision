@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}smugVision - Known Faces{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1>Known Faces</h1>
+        <p>These are the people smugVision can recognize in photos.</p>
+    </header>
+    
+    <div id="faces-grid" class="faces-grid">
+        <p id="loading-message">Loading...</p>
+    </div>
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadFaces();
+});
+
+async function loadFaces() {
+    const grid = document.getElementById('faces-grid');
+    
+    try {
+        const response = await fetch('/api/faces');
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to load faces');
+        }
+        
+        if (!data.enabled) {
+            grid.innerHTML = `
+                <article class="info-box">
+                    <p>Face recognition is not enabled or configured.</p>
+                    <p>To enable face recognition, add reference face images to your 
+                       <code>~/.smugvision/reference_faces/</code> directory.</p>
+                </article>
+            `;
+            return;
+        }
+        
+        if (data.faces.length === 0) {
+            grid.innerHTML = `
+                <article class="info-box">
+                    <p>No reference faces found.</p>
+                    <p>Add reference images to <code>~/.smugvision/reference_faces/PersonName/</code></p>
+                </article>
+            `;
+            return;
+        }
+        
+        // Update header with count
+        document.querySelector('article header p').textContent = 
+            `smugVision can recognize ${data.total} people.`;
+        
+        // Render faces
+        grid.innerHTML = '';
+        data.faces.forEach(face => {
+            const card = createFaceCard(face);
+            grid.appendChild(card);
+        });
+        
+    } catch (error) {
+        grid.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+    }
+}
+
+function createFaceCard(face) {
+    const card = document.createElement('article');
+    card.className = 'face-card';
+    
+    // Face image
+    const img = document.createElement('img');
+    img.src = `/api/face-sample/${encodeURIComponent(face.name)}`;
+    img.alt = face.display_name;
+    img.className = 'face-image';
+    img.onerror = function() {
+        this.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23ddd" width="100" height="100"/><text x="50" y="55" font-size="40" text-anchor="middle" fill="%23999">?</text></svg>';
+    };
+    
+    // Name
+    const name = document.createElement('h4');
+    name.textContent = face.display_name;
+    
+    // Reference count
+    const count = document.createElement('p');
+    count.className = 'reference-count';
+    count.textContent = `${face.reference_count} reference image${face.reference_count !== 1 ? 's' : ''}`;
+    
+    card.appendChild(img);
+    card.appendChild(name);
+    card.appendChild(count);
+    
+    return card;
+}
+</script>
+{% endblock %}
