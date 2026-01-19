@@ -235,6 +235,8 @@ class SmugMugClient:
             logger.debug(f"  Params: {params}")
         
         try:
+            # Disable automatic redirects to handle them manually
+            # (redirects lose OAuth headers which causes 401 errors)
             response = requests.request(
                 method=method,
                 url=url,
@@ -242,11 +244,43 @@ class SmugMugClient:
                 params=params,
                 json=json_data,
                 headers=request_headers,
-                timeout=self.timeout
+                timeout=self.timeout,
+                allow_redirects=False
             )
             
             # Log response status
             logger.debug(f"  Response: {response.status_code}")
+            
+            # Handle redirects manually to preserve auth
+            redirect_count = 0
+            max_redirects = 5
+            while response.status_code in (301, 302, 303, 307, 308) and redirect_count < max_redirects:
+                redirect_url = response.headers.get("Location")
+                if not redirect_url:
+                    break
+                
+                # Make absolute URL if relative
+                if redirect_url.startswith("/"):
+                    redirect_url = f"https://api.smugmug.com{redirect_url}"
+                
+                logger.debug(f"  Following redirect to: {redirect_url}")
+                
+                # For 303, always use GET; for others, preserve method
+                redirect_method = "GET" if response.status_code == 303 else method
+                
+                response = requests.request(
+                    method=redirect_method,
+                    url=redirect_url,
+                    auth=self.auth,
+                    params=params if redirect_method == method else None,
+                    json=json_data if redirect_method == method else None,
+                    headers=request_headers,
+                    timeout=self.timeout,
+                    allow_redirects=False
+                )
+                
+                logger.debug(f"  Redirect response: {response.status_code}")
+                redirect_count += 1
             
             # Handle error status codes
             if response.status_code == 404:
@@ -550,7 +584,7 @@ class SmugMugClient:
                 "start": current_start,
                 "count": min(count, 100),  # Max 100 per page
                 "_expandmethod": "inline",  # Request full URIs
-                "_expand": "ImageDownload"  # Include download URLs
+                "_expand": "ImageDownload,ImageSizes"  # Include download URLs and sizes
             }
             
             response = self._request("GET", endpoint, params=params)
@@ -578,11 +612,12 @@ class SmugMugClient:
         logger.info(f"Retrieved {len(all_images)} total images from album {album_key}")
         return all_images
     
-    def get_image(self, image_key: str) -> AlbumImage:
+    def get_image(self, image_key: str, expand_sizes: bool = False) -> AlbumImage:
         """Get image details by image key.
         
         Args:
             image_key: Image key (unique identifier)
+            expand_sizes: If True, include expanded image size URLs
             
         Returns:
             AlbumImage object
@@ -594,7 +629,12 @@ class SmugMugClient:
         logger.info(f"Fetching image: {image_key}")
         
         endpoint = f"/image/{image_key}"
-        response = self._request("GET", endpoint)
+        params = {}
+        if expand_sizes:
+            params["_expandmethod"] = "inline"
+            params["_expand"] = "ImageSizes"
+        
+        response = self._request("GET", endpoint, params=params if params else None)
         
         image_data = response.get("Response", {}).get("Image", {})
         image = AlbumImage.from_api_response(image_data)

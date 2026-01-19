@@ -80,6 +80,9 @@ class AlbumImage:
         hidden: Whether image is hidden
         processing: Whether image is still processing
         uris: Dictionary of available image URIs by size
+        latitude: GPS latitude from EXIF (if available)
+        longitude: GPS longitude from EXIF (if available)
+        altitude: GPS altitude from EXIF (if available)
     """
     image_key: str
     album_key: str
@@ -99,6 +102,14 @@ class AlbumImage:
     hidden: bool = False
     processing: bool = False
     uris: dict = field(default_factory=dict)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    altitude: Optional[float] = None
+    
+    @property
+    def has_gps(self) -> bool:
+        """Check if image has GPS coordinates."""
+        return self.latitude is not None and self.longitude is not None
     
     @classmethod
     def from_api_response(cls, data: dict, album_key: str = None) -> "AlbumImage":
@@ -119,6 +130,28 @@ class AlbumImage:
         elif not isinstance(keywords, list):
             keywords = []
         
+        # Parse GPS coordinates if available
+        latitude = data.get("Latitude")
+        longitude = data.get("Longitude")
+        altitude = data.get("Altitude")
+        
+        # Convert to float if present (API may return as string)
+        if latitude is not None:
+            try:
+                latitude = float(latitude)
+            except (ValueError, TypeError):
+                latitude = None
+        if longitude is not None:
+            try:
+                longitude = float(longitude)
+            except (ValueError, TypeError):
+                longitude = None
+        if altitude is not None:
+            try:
+                altitude = float(altitude)
+            except (ValueError, TypeError):
+                altitude = None
+        
         return cls(
             image_key=data.get("ImageKey", ""),
             album_key=album_key or data.get("AlbumKey", ""),
@@ -138,6 +171,9 @@ class AlbumImage:
             hidden=data.get("Hidden", False),
             processing=data.get("Processing", False),
             uris=data.get("Uris", {}),
+            latitude=latitude,
+            longitude=longitude,
+            altitude=altitude,
         )
     
     def has_marker_tag(self, marker_tag: str) -> bool:

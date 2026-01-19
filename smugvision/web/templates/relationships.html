@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+
+{% block title %}smugVision - Relationships{% endblock %}
+
+{% block head %}
+<!-- vis.js for graph visualization -->
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.6/dist/vis-network.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/vis-network@9.1.6/dist/dist/vis-network.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1>Relationship Graph</h1>
+        <p>Visual representation of known relationships for context-aware captions.</p>
+    </header>
+    
+    <div id="graph-container">
+        <p id="loading-message">Loading...</p>
+    </div>
+</article>
+
+<article id="groups-section" class="hidden">
+    <header>
+        <h3>Defined Groups</h3>
+    </header>
+    <div id="groups-list"></div>
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadRelationships();
+});
+
+async function loadRelationships() {
+    const container = document.getElementById('graph-container');
+    
+    try {
+        const response = await fetch('/api/relationships');
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to load relationships');
+        }
+        
+        if (!data.enabled) {
+            container.innerHTML = `
+                <article class="info-box">
+                    <p>Relationships are not configured.</p>
+                    <p>To configure relationships, create a 
+                       <code>~/.smugvision/relationships.yaml</code> file.</p>
+                </article>
+            `;
+            return;
+        }
+        
+        if (data.nodes.length === 0) {
+            container.innerHTML = `
+                <article class="info-box">
+                    <p>No relationships defined.</p>
+                    <p>Add relationships to your <code>relationships.yaml</code> file.</p>
+                </article>
+            `;
+            return;
+        }
+        
+        // Render graph
+        container.innerHTML = '';
+        renderGraph(container, data.nodes, data.edges);
+        
+        // Render groups
+        if (data.groups && data.groups.length > 0) {
+            renderGroups(data.groups);
+        }
+        
+    } catch (error) {
+        container.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+    }
+}
+
+function renderGraph(container, nodes, edges) {
+    // Create vis.js network
+    const visNodes = new vis.DataSet(nodes.map(node => ({
+        id: node.id,
+        label: node.label,
+        shape: 'ellipse',
+        color: {
+            background: '#4a9eff',
+            border: '#2d7dd2',
+            highlight: {
+                background: '#6bb3ff',
+                border: '#4a9eff'
+            }
+        },
+        font: {
+            color: '#ffffff',
+            size: 14
+        }
+    })));
+    
+    const visEdges = new vis.DataSet(edges.map(edge => ({
+        from: edge.from,
+        to: edge.to,
+        label: edge.label,
+        arrows: getArrowsForRelation(edge.label),
+        color: {
+            color: '#888888',
+            highlight: '#333333'
+        },
+        font: {
+            size: 11,
+            color: '#666666',
+            strokeWidth: 2,
+            strokeColor: '#ffffff'
+        }
+    })));
+    
+    const options = {
+        nodes: {
+            margin: 10,
+            widthConstraint: {
+                minimum: 80,
+                maximum: 150
+            }
+        },
+        edges: {
+            smooth: {
+                type: 'continuous'
+            }
+        },
+        physics: {
+            stabilization: {
+                iterations: 100
+            },
+            barnesHut: {
+                gravitationalConstant: -2000,
+                springLength: 150,
+                springConstant: 0.04
+            }
+        },
+        interaction: {
+            hover: true,
+            tooltipDelay: 200
+        }
+    };
+    
+    const network = new vis.Network(container, {nodes: visNodes, edges: visEdges}, options);
+}
+
+function getArrowsForRelation(relationType) {
+    // Directional relationships get arrows
+    const directional = ['parent', 'grandparent', 'aunt', 'uncle'];
+    if (directional.includes(relationType)) {
+        return 'to';
+    }
+    return '';
+}
+
+function renderGroups(groups) {
+    const section = document.getElementById('groups-section');
+    const list = document.getElementById('groups-list');
+    
+    section.classList.remove('hidden');
+    
+    let html = '<ul>';
+    groups.forEach(group => {
+        const members = group.members.map(m => m.replace('_', ' ')).join(', ');
+        html += `<li><strong>${group.description}:</strong> ${members}</li>`;
+    });
+    html += '</ul>';
+    
+    list.innerHTML = html;
+}
+</script>
+{% endblock %}

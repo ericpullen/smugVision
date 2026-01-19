@@ -131,11 +131,13 @@ smugvision/
 └── utils/                   # ✅ PARTIALLY IMPLEMENTED
     ├── __init__.py
     ├── exif.py              # EXIF data extraction and geocoding
+    ├── locations.py         # Custom location resolution (✅ IMPLEMENTED)
     ├── relationships.py     # Person relationship management
     └── helpers.py           # Helper functions
 
 config.yaml                  # User configuration file
 config.yaml.example          # Example configuration (✅ CREATED)
+locations.yaml.example       # Example custom locations file (✅ CREATED)
 requirements.txt             # Python dependencies
 setup.py                     # Package installation
 README.md                    # User documentation
@@ -170,6 +172,12 @@ processing:
   generate_tags: true           # Enable tag generation
   preserve_existing: true       # Keep existing captions/tags
   image_size: "medium"          # Download size from SmugMug
+
+# Location Resolution Configuration
+location:
+  custom_locations_file: "~/.smugvision/locations.yaml"
+  check_custom_first: true      # Check custom locations before geocoding
+  use_aliases_as_tags: true     # Add location aliases as keyword tags
 
 # Prompt Configuration
 prompts:
@@ -217,6 +225,48 @@ logging:
 - If GPS coordinates exist, attempt reverse geocoding to location name
 - Include location information naturally in prompts sent to vision model
 - Example: "A sunset over the Golden Gate Bridge in San Francisco, California"
+
+### 2.1 Custom Location Reference (✅ IMPLEMENTED)
+
+Custom locations allow users to define friendly names for places like their home, relatives' houses, or frequently visited locations. These override reverse geocoding results.
+
+**Use Cases:**
+- Get "Eric's House" instead of a street address
+- Ensure consistent naming across all photos at the same location
+- Faster processing (no API calls needed for custom locations)
+- Add searchable aliases as tags
+
+**locations.yaml** example:
+
+```yaml
+locations:
+  - name: "Eric Pullen's House"
+    latitude: 38.123456
+    longitude: -85.654321
+    radius: 50                    # Match radius in meters
+    address: "5311 Montfort Lane, Louisville, KY"
+    aliases:
+      - "Home"
+      - "Pullen Residence"
+  
+  - name: "Louisville Slugger Field"
+    latitude: 38.256510
+    longitude: -85.747476
+    radius: 200                   # Larger radius for a stadium
+    aliases:
+      - "Bats Game"
+      - "Baseball Stadium"
+```
+
+**Resolution Priority:**
+1. Check custom locations file first (closest match within radius)
+2. If no match, fall back to Overpass API / Nominatim reverse geocoding
+3. If geocoding fails, return coordinates as string
+
+**Key Classes:**
+- `LocationResolver`: Loads and manages custom locations from YAML
+- `CustomLocation`: Data class for a single location definition
+- `LocationMatch`: Result of a coordinate match including distance
 
 ### 3. Metadata Preservation
 
@@ -854,6 +904,535 @@ For each image in album:
 3. **Batch size**: What's the optimal number of images to process before syncing to SmugMug?
 4. **Model switching**: Should we support multiple models simultaneously for comparison?
 5. **Undo functionality**: How to implement rollback of metadata changes?
+
+---
+
+---
+
+## Web UI Design (Phase 3 Feature)
+
+### Overview
+
+A local web-based interface for smugVision that provides a visual preview of AI-generated metadata before committing changes to SmugMug. The UI defaults to dry-run mode, showing proposed changes alongside thumbnails, and requires explicit user confirmation to commit.
+
+### Goals
+
+1. Provide visual feedback for processing decisions
+2. Show side-by-side comparison of current vs. proposed metadata
+3. Default to safe dry-run mode (no changes without explicit commit)
+4. Display detected faces and location information
+5. Surface reference face and relationship data for transparency
+
+### Technical Stack
+
+- **Backend**: Flask (Python) - Simple, integrates directly with existing smugVision modules
+- **Frontend**: Vanilla HTML/CSS/JavaScript with a simple CSS framework (e.g., Pico CSS or similar minimal framework)
+- **Communication**: REST API + Server-Sent Events (SSE) for progress updates
+- **Deployment**: Localhost only (e.g., `http://localhost:5050`)
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Web Browser                               │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    smugVision Web UI                      │   │
+│  │  ┌─────────────┐  ┌────────────────────────────────────┐ │   │
+│  │  │ Album Input │  │         Preview Grid               │ │   │
+│  │  │ (URL paste) │  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐  │ │   │
+│  │  └─────────────┘  │  │thumb│ │thumb│ │thumb│ │thumb│  │ │   │
+│  │  ┌─────────────┐  │  │+diff│ │+diff│ │+diff│ │+diff│  │ │   │
+│  │  │   Actions   │  │  └─────┘ └─────┘ └─────┘ └─────┘  │ │   │
+│  │  │ [Preview]   │  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐  │ │   │
+│  │  │ [Commit]    │  │  │thumb│ │thumb│ │thumb│ │thumb│  │ │   │
+│  │  └─────────────┘  │  │+diff│ │+diff│ │+diff│ │+diff│  │ │   │
+│  │  ┌─────────────┐  │  └─────┘ └─────┘ └─────┘ └─────┘  │ │   │
+│  │  │  Progress   │  │         (infinite scroll)          │ │   │
+│  │  │  [███░░] 60%│  └────────────────────────────────────┘ │   │
+│  │  └─────────────┘                                          │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ HTTP/SSE
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Flask Backend (localhost:5050)               │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                      REST API Routes                      │   │
+│  │  POST /api/preview     - Start preview processing         │   │
+│  │  GET  /api/preview/status - SSE stream for progress       │   │
+│  │  GET  /api/preview/results - Get preview results          │   │
+│  │  POST /api/commit      - Commit changes to SmugMug        │   │
+│  │  GET  /api/faces       - List known reference faces       │   │
+│  │  GET  /api/relationships - Get relationship graph data    │   │
+│  │  GET  /api/thumbnail/<key> - Proxy thumbnail from SmugMug │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │              Existing smugVision Modules                  │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────────────┐    │   │
+│  │  │ SmugMug    │ │ Image      │ │ Face               │    │   │
+│  │  │ Client     │ │ Processor  │ │ Recognizer         │    │   │
+│  │  └────────────┘ └────────────┘ └────────────────────┘    │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────────────┐    │   │
+│  │  │ Vision     │ │ Cache      │ │ Relationship       │    │   │
+│  │  │ Model      │ │ Manager    │ │ Manager            │    │   │
+│  │  └────────────┘ └────────────┘ └────────────────────┘    │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Module Structure
+
+```
+smugvision/
+├── web/                        # NEW: Web UI module
+│   ├── __init__.py
+│   ├── app.py                  # Flask application factory
+│   ├── routes/
+│   │   ├── __init__.py
+│   │   ├── api.py              # REST API endpoints
+│   │   └── pages.py            # HTML page routes
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── preview.py          # Preview processing service
+│   ├── static/
+│   │   ├── css/
+│   │   │   └── style.css       # Custom styles
+│   │   └── js/
+│   │       └── app.js          # Frontend JavaScript
+│   └── templates/
+│       ├── base.html           # Base template
+│       ├── index.html          # Main page
+│       ├── preview.html        # Preview results
+│       ├── faces.html          # Known faces display
+│       └── relationships.html  # Relationship graph
+```
+
+### API Endpoints
+
+#### POST /api/preview
+Start a preview (dry-run) processing job for an album.
+
+**Request:**
+```json
+{
+  "url": "https://site.smugmug.com/.../n-XXXXX/album-name",
+  "force_reprocess": false
+}
+```
+
+**Response:**
+```json
+{
+  "job_id": "abc123",
+  "album_key": "XXXXX",
+  "album_name": "Album Name",
+  "total_images": 42,
+  "status": "processing"
+}
+```
+
+#### GET /api/preview/status?job_id=abc123
+Server-Sent Events stream for progress updates.
+
+**SSE Events:**
+```
+event: progress
+data: {"current": 5, "total": 42, "filename": "IMG_1234.jpg", "percent": 12}
+
+event: image_complete
+data: {"image_key": "xxx", "filename": "IMG_1234.jpg", "success": true}
+
+event: complete
+data: {"processed": 40, "skipped": 2, "errors": 0}
+
+event: error
+data: {"message": "Failed to process IMG_5678.jpg: timeout"}
+```
+
+#### GET /api/preview/results?job_id=abc123
+Get the full preview results after processing completes.
+
+**Response:**
+```json
+{
+  "job_id": "abc123",
+  "album_key": "XXXXX",
+  "album_name": "Album Name",
+  "status": "complete",
+  "stats": {
+    "total": 42,
+    "processed": 40,
+    "skipped": 2,
+    "errors": 0
+  },
+  "images": [
+    {
+      "image_key": "img123",
+      "filename": "IMG_1234.jpg",
+      "thumbnail_url": "/api/thumbnail/img123",
+      "web_uri": "https://site.smugmug.com/...",
+      "status": "processed",
+      "current": {
+        "caption": "Existing caption or null",
+        "keywords": ["tag1", "tag2"]
+      },
+      "proposed": {
+        "caption": "AI-generated caption with location and people",
+        "keywords": ["tag1", "tag2", "newtag1", "newtag2", "smugvision"]
+      },
+      "details": {
+        "faces_detected": ["John Doe", "Jane Smith"],
+        "location": "Golden Gate Bridge, San Francisco, CA",
+        "exif_date": "2024-06-15T14:30:00"
+      }
+    },
+    {
+      "image_key": "img456",
+      "filename": "IMG_5678.jpg",
+      "thumbnail_url": "/api/thumbnail/img456",
+      "status": "skipped",
+      "reason": "Already has smugvision marker tag"
+    },
+    {
+      "image_key": "img789",
+      "filename": "IMG_9012.jpg",
+      "thumbnail_url": "/api/thumbnail/img789",
+      "status": "error",
+      "error": "Vision model timeout"
+    }
+  ]
+}
+```
+
+#### POST /api/commit
+Commit the previewed changes to SmugMug.
+
+**Request:**
+```json
+{
+  "job_id": "abc123"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "committed": 40,
+  "errors": 0
+}
+```
+
+#### GET /api/faces
+Get list of known reference faces.
+
+**Response:**
+```json
+{
+  "faces": [
+    {
+      "name": "John Doe",
+      "display_name": "John Doe",
+      "reference_count": 3,
+      "sample_image": "/api/face-sample/John_Doe"
+    },
+    {
+      "name": "Jane Smith",
+      "display_name": "Jane Smith", 
+      "reference_count": 2,
+      "sample_image": "/api/face-sample/Jane_Smith"
+    }
+  ],
+  "total": 2
+}
+```
+
+#### GET /api/relationships
+Get relationship graph data for visualization.
+
+**Response:**
+```json
+{
+  "nodes": [
+    {"id": "John_Doe", "label": "John Doe"},
+    {"id": "Jane_Smith", "label": "Jane Smith"},
+    {"id": "Junior_Doe", "label": "Junior Doe"}
+  ],
+  "edges": [
+    {"from": "John_Doe", "to": "Jane_Smith", "label": "spouse"},
+    {"from": "John_Doe", "to": "Junior_Doe", "label": "parent"},
+    {"from": "Jane_Smith", "to": "Junior_Doe", "label": "parent"}
+  ],
+  "groups": [
+    {
+      "members": ["John_Doe", "Jane_Smith", "Junior_Doe"],
+      "description": "The Doe Family"
+    }
+  ]
+}
+```
+
+#### GET /api/thumbnail/<image_key>
+Proxy thumbnail image from SmugMug (avoids CORS issues).
+
+**Response:** Image binary (JPEG)
+
+#### GET /api/face-sample/<person_name>
+Get a sample reference face image for display.
+
+**Response:** Image binary (JPEG)
+
+### UI Pages
+
+#### Main Page (index.html)
+- URL input field for SmugMug album URL
+- "Preview" button to start dry-run processing
+- Navigation to Faces and Relationships pages
+- Status indicator for Ollama/vision model availability
+
+#### Preview Results Page (preview.html)
+- Album info header (name, image count)
+- Progress bar (during processing)
+- Infinite-scroll grid of image cards:
+  - Thumbnail image
+  - Status indicator (processed/skipped/error)
+  - Current vs. Proposed metadata diff view
+  - Detected faces chips
+  - Location badge
+- "Commit All Changes" button (disabled during processing, enabled after)
+- Summary statistics
+
+#### Image Card Component
+```
+┌─────────────────────────────────────────────────────────┐
+│  ┌─────────────┐  IMG_1234.jpg                    [✓]  │
+│  │             │  ─────────────────────────────────────│
+│  │  thumbnail  │  Caption:                             │
+│  │             │  - "Family at the beach"              │
+│  │             │  + "John and Jane enjoying sunset at  │
+│  └─────────────┘    Golden Gate Bridge, San Francisco" │
+│                                                         │
+│  Keywords:                                              │
+│  [beach] [vacation] + [Golden Gate] + [sunset]         │
+│  + [John Doe] + [Jane Smith] + [smugvision]            │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │ 👤 John Doe, Jane Smith  📍 San Francisco, CA   │  │
+│  └──────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+
+Skipped Card (grayed out):
+┌─────────────────────────────────────────────────────────┐
+│  ┌─────────────┐  IMG_5678.jpg              [SKIPPED]  │
+│  │             │  ─────────────────────────────────────│
+│  │  thumbnail  │  Already processed (has smugvision    │
+│  │  (grayed)   │  marker tag)                          │
+│  │             │                                        │
+│  └─────────────┘  Current: "Existing caption..."       │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### Known Faces Page (faces.html)
+- Grid of known people with sample face images
+- Count of reference images per person
+- Simple display (no add/remove functionality for now)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Known Faces (5 people)                                      │
+│  ────────────────────────────────────────────────────────────│
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐          │
+│  │   [face]    │  │   [face]    │  │   [face]    │          │
+│  │  John Doe   │  │ Jane Smith  │  │ Junior Doe  │          │
+│  │  3 refs     │  │  2 refs     │  │  1 ref      │          │
+│  └─────────────┘  └─────────────┘  └─────────────┘          │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### Relationships Page (relationships.html)
+- Visual graph of relationships (using a simple JS graph library like vis.js or cytoscape.js)
+- List view of defined groups
+- Shows relationship types (spouse, parent, sibling, etc.)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Relationship Graph                                          │
+│  ────────────────────────────────────────────────────────────│
+│                                                              │
+│            ┌──────────┐                                      │
+│            │ John Doe │                                      │
+│            └────┬─────┘                                      │
+│         spouse  │                                            │
+│            ┌────┴─────┐                                      │
+│            │Jane Smith│                                      │
+│            └────┬─────┘                                      │
+│          parent │                                            │
+│            ┌────┴─────┐                                      │
+│            │Junior Doe│                                      │
+│            └──────────┘                                      │
+│                                                              │
+│  Groups:                                                     │
+│  • The Doe Family: John Doe, Jane Smith, Junior Doe          │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+#### Preview Workflow
+
+```
+1. User enters SmugMug URL → clicks "Preview"
+   │
+2. POST /api/preview
+   │
+3. Backend:
+   ├── Parse URL → extract album key
+   ├── Fetch album info from SmugMug
+   ├── Return job_id immediately
+   │
+4. Frontend connects to GET /api/preview/status?job_id=xxx (SSE)
+   │
+5. Backend processes each image (dry_run=True):
+   │   For each image:
+   │   ├── Download thumbnail/medium image
+   │   ├── Extract EXIF location
+   │   ├── Detect/identify faces
+   │   ├── Generate caption & tags via vision model
+   │   ├── Format proposed metadata
+   │   ├── Store result in memory (job results dict)
+   │   └── Send SSE progress event
+   │
+6. Frontend receives SSE events → updates progress bar
+   │
+7. Processing complete → SSE "complete" event
+   │
+8. Frontend calls GET /api/preview/results
+   │
+9. Frontend renders image grid with diff views
+```
+
+#### Commit Workflow
+
+```
+1. User reviews preview → clicks "Commit All Changes"
+   │
+2. POST /api/commit {job_id: "xxx"}
+   │
+3. Backend:
+   │   For each processed image in job results:
+   │   ├── Call SmugMug PATCH API with proposed metadata
+   │   └── Track success/failure
+   │
+4. Return commit results
+   │
+5. Frontend shows success message with statistics
+```
+
+### State Management
+
+The backend maintains in-memory state for active preview jobs:
+
+```python
+# In-memory job storage (simple dict for localhost use)
+preview_jobs: Dict[str, PreviewJob] = {}
+
+@dataclass
+class PreviewJob:
+    job_id: str
+    album_key: str
+    album_name: str
+    status: str  # "processing", "complete", "error"
+    total_images: int
+    current_image: int
+    results: List[ImagePreviewResult]
+    created_at: datetime
+    
+@dataclass
+class ImagePreviewResult:
+    image_key: str
+    filename: str
+    thumbnail_url: str
+    web_uri: str
+    status: str  # "processed", "skipped", "error"
+    current_caption: Optional[str]
+    current_keywords: List[str]
+    proposed_caption: Optional[str]
+    proposed_keywords: List[str]
+    faces_detected: List[str]
+    location: Optional[str]
+    error: Optional[str]
+```
+
+### CLI Integration
+
+Add a new command to start the web server:
+
+```bash
+# Start the web UI server
+smugvision-web
+
+# Or with options
+smugvision-web --port 5050 --debug
+```
+
+This will be a new console script entry point in pyproject.toml.
+
+### Implementation Plan
+
+#### Phase 1: Core Backend & Basic UI
+1. Create Flask app structure with routes
+2. Implement `/api/preview` endpoint (leverages existing ImageProcessor with dry_run=True)
+3. Implement SSE progress streaming
+4. Implement `/api/preview/results` endpoint
+5. Create basic HTML templates with URL input and progress display
+6. Implement thumbnail proxying
+
+#### Phase 2: Preview Display
+1. Build image card component with diff view
+2. Implement infinite scroll for results
+3. Style processed/skipped/error states
+4. Add faces and location display to cards
+
+#### Phase 3: Commit Flow
+1. Implement `/api/commit` endpoint
+2. Add commit button with confirmation
+3. Show commit results/statistics
+
+#### Phase 4: Faces & Relationships Pages
+1. Implement `/api/faces` endpoint
+2. Build faces gallery page
+3. Implement `/api/relationships` endpoint  
+4. Build relationship graph visualization (using vis.js or similar)
+
+### Dependencies (New)
+
+```
+# Add to requirements.txt
+flask>=3.0.0
+```
+
+No heavy frontend framework needed - vanilla JS with fetch API and EventSource for SSE.
+
+### Security Considerations
+
+- **Localhost only**: Server binds to 127.0.0.1, not 0.0.0.0
+- **No authentication**: Assumes trusted local environment
+- **No persistent storage**: Job data is in-memory only, cleared on restart
+- **SmugMug credentials**: Read from existing config.yaml, never exposed via API
+
+### Future Enhancements (Not in Initial Scope)
+
+- [ ] Multiple gallery processing queue
+- [ ] Gallery browser (tree view of SmugMug folders)
+- [ ] Selective commit (checkbox per image)
+- [ ] Edit proposed metadata before commit
+- [ ] Reference face management (add/remove)
+- [ ] Cache management UI
+- [ ] Processing history/logs view
+- [ ] Dark mode
 
 ---
 
