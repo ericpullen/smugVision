@@ -1,14 +1,21 @@
 """Face recognition using reference faces."""
 
+import hashlib
+import json
 import logging
+import pickle
+import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 # Suppress pkg_resources deprecation warning from face_recognition_models
 warnings.filterwarnings('ignore', message='.*pkg_resources is deprecated.*', category=UserWarning)
 
 logger = logging.getLogger(__name__)
+
+# Cache version - increment this when encoding format changes
+CACHE_VERSION = 1
 
 # Try to import face_recognition, make it optional
 FACE_RECOGNITION_AVAILABLE = False
@@ -48,7 +55,9 @@ class FaceRecognizer:
         reference_faces_dir: Optional[str] = None,
         tolerance: float = 0.6,
         model: str = "cnn",
-        detection_scale: float = 0.5
+        detection_scale: float = 0.5,
+        cache_dir: Optional[str] = None,
+        use_cache: bool = True
     ) -> None:
         """Initialize face recognizer.
         
@@ -61,6 +70,9 @@ class FaceRecognizer:
             detection_scale: Scale factor for resizing images before face detection (0.0-1.0).
                            Lower values = faster but may miss small/distant faces.
                            Default 0.5 gives 3-4x speedup with minimal accuracy loss.
+            cache_dir: Directory for storing face encoding cache. Defaults to 
+                      ~/.smugvision/cache/face_encodings if not specified.
+            use_cache: Whether to use caching for reference face encodings. Default True.
         
         Raises:
             ImportError: If face_recognition library is not installed or models are missing
@@ -89,15 +101,130 @@ class FaceRecognizer:
         self.tolerance = tolerance
         self.model = model
         self.detection_scale = max(0.1, min(1.0, detection_scale))  # Clamp between 0.1 and 1.0
+        self.use_cache = use_cache
+        
+        # Set up cache directory
+        if cache_dir:
+            self.cache_dir = Path(cache_dir)
+        else:
+            self.cache_dir = Path.home() / ".smugvision" / "cache" / "face_encodings"
         
         if reference_faces_dir:
             self.load_reference_faces(reference_faces_dir)
+    
+    def _get_file_fingerprint(self, file_path: Path) -> str:
+        """Get a fingerprint for a file based on path, size, and modification time.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            String fingerprint for cache invalidation
+        """
+        stat = file_path.stat()
+        # Use path, size, and mtime for fingerprint
+        fingerprint_data = f"{file_path}|{stat.st_size}|{stat.st_mtime}"
+        return hashlib.md5(fingerprint_data.encode()).hexdigest()
+    
+    def _get_cache_paths(self, ref_dir: Path) -> Tuple[Path, Path]:
+        """Get paths for cache files.
+        
+        Args:
+            ref_dir: Reference faces directory
+            
+        Returns:
+            Tuple of (encodings_path, manifest_path)
+        """
+        # Create a unique cache name based on the reference directory path
+        dir_hash = hashlib.md5(str(ref_dir.resolve()).encode()).hexdigest()[:12]
+        cache_name = f"face_encodings_{dir_hash}"
+        
+        encodings_path = self.cache_dir / f"{cache_name}.pkl"
+        manifest_path = self.cache_dir / f"{cache_name}_manifest.json"
+        
+        return encodings_path, manifest_path
+    
+    def _load_cache(self, ref_dir: Path) -> Tuple[Dict[str, Any], Dict[str, List]]:
+        """Load cached face encodings and manifest.
+        
+        Args:
+            ref_dir: Reference faces directory
+            
+        Returns:
+            Tuple of (manifest_dict, encodings_dict)
+            Returns empty dicts if cache doesn't exist or is invalid
+        """
+        encodings_path, manifest_path = self._get_cache_paths(ref_dir)
+        
+        if not encodings_path.exists() or not manifest_path.exists():
+            logger.debug("No cache found")
+            return {}, {}
+        
+        try:
+            # Load manifest
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
+            
+            # Check cache version
+            if manifest.get('version') != CACHE_VERSION:
+                logger.info(f"Cache version mismatch (expected {CACHE_VERSION}, got {manifest.get('version')}), rebuilding")
+                return {}, {}
+            
+            # Load encodings
+            with open(encodings_path, 'rb') as f:
+                encodings = pickle.load(f)
+            
+            logger.debug(f"Loaded cache with {len(manifest.get('files', {}))} file entries")
+            return manifest, encodings
+            
+        except Exception as e:
+            logger.warning(f"Failed to load cache: {e}")
+            return {}, {}
+    
+    def _save_cache(
+        self,
+        ref_dir: Path,
+        manifest: Dict[str, Any],
+        encodings: Dict[str, List]
+    ) -> None:
+        """Save face encodings and manifest to cache.
+        
+        Args:
+            ref_dir: Reference faces directory
+            manifest: File fingerprint manifest
+            encodings: Face encodings by person name
+        """
+        try:
+            # Ensure cache directory exists
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            
+            encodings_path, manifest_path = self._get_cache_paths(ref_dir)
+            
+            # Save manifest
+            manifest['version'] = CACHE_VERSION
+            manifest['created'] = time.time()
+            manifest['ref_dir'] = str(ref_dir.resolve())
+            
+            with open(manifest_path, 'w') as f:
+                json.dump(manifest, f, indent=2)
+            
+            # Save encodings
+            with open(encodings_path, 'wb') as f:
+                pickle.dump(encodings, f)
+            
+            logger.debug(f"Saved cache to {encodings_path}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to save cache: {e}")
     
     def load_reference_faces(self, directory: str) -> None:
         """Load reference face images from a directory.
         
         Each subdirectory should be named after a person, containing their reference images.
         All image files within a person's directory will be loaded as reference faces.
+        
+        Uses caching to avoid re-encoding unchanged images. The cache stores face encodings
+        and tracks file fingerprints (path, size, mtime) to detect changes.
         
         Example directory structure:
             faces/
@@ -117,12 +244,23 @@ class FaceRecognizer:
             logger.warning(f"Reference faces directory not found: {directory}")
             return
         
+        start_time = time.time()
         logger.info(f"Loading reference faces from: {directory}")
         
         # Supported image extensions
         image_extensions = {'.jpg', '.jpeg', '.png', '.heic', '.heif'}
         
-        loaded_count = 0
+        # Load existing cache
+        cached_manifest, cached_encodings = {}, {}
+        if self.use_cache:
+            cached_manifest, cached_encodings = self._load_cache(ref_dir)
+        
+        cached_files = cached_manifest.get('files', {})
+        
+        # Track what we're loading
+        new_manifest_files = {}
+        loaded_from_cache = 0
+        encoded_fresh = 0
         
         # Iterate through subdirectories (each is a person)
         for person_dir in ref_dir.iterdir():
@@ -131,7 +269,7 @@ class FaceRecognizer:
                 continue
             
             person_name = person_dir.name
-            person_face_count = 0
+            person_encodings = []
             
             # Load all images from this person's directory
             for image_path in person_dir.iterdir():
@@ -142,29 +280,70 @@ class FaceRecognizer:
                     logger.debug(f"Skipping non-image file: {image_path.name}")
                     continue
                 
-                try:
-                    # Load and encode the face
-                    encoding = self._encode_face(image_path)
-                    if encoding is not None:
-                        if person_name not in self.reference_faces:
-                            self.reference_faces[person_name] = []
-                        self.reference_faces[person_name].append(encoding)
-                        loaded_count += 1
-                        person_face_count += 1
-                        logger.debug(f"Loaded reference face for {person_name} from {image_path.name}")
-                    else:
-                        logger.warning(f"No face found in reference image: {image_path}")
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to load reference face from {image_path}: {e}"
-                    )
+                # Get file fingerprint for cache lookup
+                file_key = str(image_path.resolve())
+                current_fingerprint = self._get_file_fingerprint(image_path)
+                
+                # Check if we have a valid cached encoding
+                cached_fingerprint = cached_files.get(file_key, {}).get('fingerprint')
+                cached_person = cached_files.get(file_key, {}).get('person')
+                
+                if (self.use_cache and 
+                    cached_fingerprint == current_fingerprint and 
+                    cached_person == person_name and
+                    file_key in cached_encodings):
+                    # Use cached encoding
+                    encoding = cached_encodings[file_key]
+                    person_encodings.append(encoding)
+                    loaded_from_cache += 1
+                    logger.debug(f"Loaded cached encoding for {person_name}/{image_path.name}")
+                else:
+                    # Need to encode fresh
+                    try:
+                        encoding = self._encode_face(image_path)
+                        if encoding is not None:
+                            person_encodings.append(encoding)
+                            # Store in cache
+                            if self.use_cache:
+                                cached_encodings[file_key] = encoding
+                            encoded_fresh += 1
+                            logger.debug(f"Encoded fresh face for {person_name}/{image_path.name}")
+                        else:
+                            logger.warning(f"No face found in reference image: {image_path}")
+                            continue  # Don't add to manifest if no face found
+                    except Exception as e:
+                        logger.warning(f"Failed to load reference face from {image_path}: {e}")
+                        continue
+                
+                # Update manifest
+                new_manifest_files[file_key] = {
+                    'fingerprint': current_fingerprint,
+                    'person': person_name,
+                    'filename': image_path.name
+                }
             
-            if person_face_count > 0:
-                logger.debug(f"Loaded {person_face_count} reference face(s) for {person_name}")
+            if person_encodings:
+                self.reference_faces[person_name] = person_encodings
+                logger.debug(f"Loaded {len(person_encodings)} reference face(s) for {person_name}")
+        
+        # Save updated cache
+        if self.use_cache and (encoded_fresh > 0 or len(new_manifest_files) != len(cached_files)):
+            # Clean up cached encodings for files that no longer exist
+            valid_keys = set(new_manifest_files.keys())
+            cached_encodings = {k: v for k, v in cached_encodings.items() if k in valid_keys}
+            
+            self._save_cache(ref_dir, {'files': new_manifest_files}, cached_encodings)
+        
+        elapsed = time.time() - start_time
+        total_faces = sum(len(faces) for faces in self.reference_faces.values())
+        
+        cache_status = ""
+        if self.use_cache:
+            cache_status = f" ({loaded_from_cache} from cache, {encoded_fresh} newly encoded)"
         
         logger.info(
-            f"Loaded {loaded_count} reference face(s) for "
-            f"{len(self.reference_faces)} person(s)"
+            f"Loaded {total_faces} reference face(s) for "
+            f"{len(self.reference_faces)} person(s) in {elapsed:.2f}s{cache_status}"
         )
     
     def _encode_face(self, image_path: str) -> Optional[List]:
@@ -398,4 +577,71 @@ class FaceRecognizer:
         """
         identified = self.identify_faces(image_path)
         return len(identified)
+    
+    def clear_cache(self) -> bool:
+        """Clear the face encoding cache.
+        
+        Returns:
+            True if cache was cleared, False if no cache existed or error occurred
+        """
+        try:
+            if not self.cache_dir.exists():
+                logger.debug("No cache directory to clear")
+                return False
+            
+            cleared = False
+            for cache_file in self.cache_dir.glob("face_encodings_*"):
+                cache_file.unlink()
+                cleared = True
+                logger.debug(f"Deleted cache file: {cache_file}")
+            
+            if cleared:
+                logger.info("Face encoding cache cleared")
+            return cleared
+            
+        except Exception as e:
+            logger.warning(f"Failed to clear cache: {e}")
+            return False
+    
+    def get_cache_info(self) -> Optional[Dict[str, Any]]:
+        """Get information about the current cache.
+        
+        Returns:
+            Dictionary with cache info, or None if no cache exists
+        """
+        try:
+            # Find any manifest files
+            if not self.cache_dir.exists():
+                return None
+            
+            manifests = list(self.cache_dir.glob("face_encodings_*_manifest.json"))
+            if not manifests:
+                return None
+            
+            info = {
+                'cache_dir': str(self.cache_dir),
+                'manifests': []
+            }
+            
+            for manifest_path in manifests:
+                with open(manifest_path, 'r') as f:
+                    manifest = json.load(f)
+                
+                encodings_path = manifest_path.with_name(
+                    manifest_path.name.replace('_manifest.json', '.pkl')
+                )
+                
+                info['manifests'].append({
+                    'ref_dir': manifest.get('ref_dir'),
+                    'version': manifest.get('version'),
+                    'created': manifest.get('created'),
+                    'file_count': len(manifest.get('files', {})),
+                    'cache_size_bytes': encodings_path.stat().st_size if encodings_path.exists() else 0
+                })
+            
+            return info
+            
+        except Exception as e:
+            logger.warning(f"Failed to get cache info: {e}")
+            return None
 

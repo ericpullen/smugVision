@@ -29,6 +29,8 @@ DEFAULT_CONFIG = {
         "model": "cnn",
         "detection_scale": 0.5,
         "min_confidence": 0.25,
+        "use_cache": True,  # Cache face encodings for faster startup
+        "cache_dir": str(Path.home() / ".smugvision" / "cache" / "face_encodings"),
     },
     
     # Processing Configuration
