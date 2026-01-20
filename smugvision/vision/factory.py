@@ -19,9 +19,27 @@ class VisionModelFactory:
     """
     
     # Registry of available model classes
+    # All Ollama vision models use the same LlamaVisionModel class
     _model_registry: Dict[str, Type[VisionModel]] = {
         "llama3.2-vision": LlamaVisionModel,
         "llama3.2": LlamaVisionModel,  # Alias
+        "qwen3-vl": LlamaVisionModel,  # Qwen3-VL vision model
+        "qwen3-vl:2b": LlamaVisionModel,
+        "qwen3-vl:4b": LlamaVisionModel,
+        "qwen3-vl:8b": LlamaVisionModel,
+        "qwen3-vl:30b": LlamaVisionModel,
+        "qwen3-vl:32b": LlamaVisionModel,
+        "minicpm-v": LlamaVisionModel,  # MiniCPM-V vision model
+        "openbmb/minicpm-v4.5": LlamaVisionModel,  # MiniCPM-V 4.5
+        "openbmb/minicpm-v4.5:latest": LlamaVisionModel,
+        "gemma3": LlamaVisionModel,  # Google Gemma 3 vision model
+        "gemma3:4b": LlamaVisionModel,
+        "gemma3:12b": LlamaVisionModel,
+        "gemma3:27b": LlamaVisionModel,
+        "llava": LlamaVisionModel,  # LLaVA vision model
+        "llava:7b": LlamaVisionModel,
+        "llava:13b": LlamaVisionModel,
+        "llava:34b": LlamaVisionModel,
     }
     
     @classmethod

@@ -14,10 +14,10 @@ DEFAULT_CONFIG = {
     
     # Vision Model Configuration
     "vision": {
-        "model": "llama3.2-vision",
+        "model": "qwen3-vl:8b",
         "endpoint": "http://localhost:11434",
         "temperature": 0.7,
-        "max_tokens": 150,
+        "max_tokens": 500,  # Thinking models need more tokens
         "timeout": 120,
     },
     
@@ -53,21 +53,15 @@ DEFAULT_CONFIG = {
     # Prompt Configuration
     "prompts": {
         "caption": (
-            "Analyze this image and provide a concise, descriptive caption "
-            "(1-2 sentences) that describes the main subject, setting, and "
-            "any notable activities or features."
+            "You are a photo captioning assistant. Write exactly ONE caption (1-2 sentences) "
+            "for this image. Describe the main subject, setting, and activity. "
+            "IMPORTANT: Output ONLY the caption text. No options, no explanations, no "
+            "introductions like 'Here is...' - just the caption itself."
         ),
         "tags": (
-            "Generate 5-10 simple, single-word or short-phrase keyword tags for this image. "
-            "Use simple descriptive words like: restaurant, eating, family, indoor, etc. "
-            "Focus on:\n"
-            "- Main subjects and objects (one word each)\n"
-            "- Activities or actions (one word each)\n"
-            "- Setting and location (one word each)\n"
-            "- Colors and mood (one word each)\n"
-            "- Time of day or season (if apparent)\n"
-            "Provide ONLY a comma-separated list of simple tags, nothing else. "
-            "Example format: restaurant, eating, family, indoor, casual, warm"
+            "Output a comma-separated list of 5-10 keyword tags for this image. "
+            "IMPORTANT: Output ONLY the tags separated by commas. No explanations, "
+            "no numbering, no extra text. Example output: dog, playing, park, sunny, happy"
         ),
     },
     

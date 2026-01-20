@@ -111,9 +111,6 @@ class PreviewService:
     is delegated to the core library.
     """
     
-    # In-memory storage of preview jobs
-    _jobs: Dict[str, PreviewJob] = {}
-    
     def __init__(self, config: ConfigManager):
         """Initialize preview service.
         
@@ -124,6 +121,11 @@ class PreviewService:
         self._processor: Optional[ImageProcessor] = None
         self._processor_loaded: bool = False
         self._init_lock = threading.Lock()
+        
+        # Instance-level job storage (not class-level to avoid memory leak)
+        # Only keep the most recent jobs to limit memory usage
+        self._jobs: Dict[str, PreviewJob] = {}
+        self._max_jobs = 5  # Keep at most 5 jobs in memory
     
     @property
     def processor(self) -> ImageProcessor:
@@ -225,6 +227,9 @@ class PreviewService:
         # Filter to images only (no videos for now)
         images = [img for img in images if not img.is_video]
         
+        # Clean up old jobs to limit memory usage
+        self._cleanup_old_jobs()
+        
         # Create job
         job = PreviewJob(
             job_id=str(uuid.uuid4())[:8],
@@ -244,6 +249,31 @@ class PreviewService:
     def get_job(self, job_id: str) -> Optional[PreviewJob]:
         """Get a preview job by ID."""
         return self._jobs.get(job_id)
+    
+    def _cleanup_old_jobs(self) -> None:
+        """Remove old jobs to limit memory usage.
+        
+        Keeps the most recent jobs up to _max_jobs limit.
+        """
+        if len(self._jobs) >= self._max_jobs:
+            # Sort jobs by creation time, remove oldest
+            sorted_jobs = sorted(
+                self._jobs.items(),
+                key=lambda x: x[1].created_at,
+                reverse=True
+            )
+            
+            # Keep only the newest jobs
+            jobs_to_keep = dict(sorted_jobs[:self._max_jobs - 1])
+            removed_count = len(self._jobs) - len(jobs_to_keep)
+            
+            # Clear results from removed jobs to free memory
+            for job_id, job in self._jobs.items():
+                if job_id not in jobs_to_keep:
+                    job.results.clear()
+            
+            self._jobs = jobs_to_keep
+            logger.debug(f"Cleaned up {removed_count} old preview jobs")
     
     def process_preview(
         self,
@@ -324,6 +354,8 @@ class PreviewService:
             
             # Mark job complete
             job.status = "complete"
+            
+            logger.info(f"Preview job {job_id} complete: {job.processed_count} processed, {job.skipped_count} skipped, {job.error_count} errors")
             
             yield {
                 "event": "complete",

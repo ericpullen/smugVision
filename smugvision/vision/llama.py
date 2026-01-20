@@ -142,6 +142,45 @@ class LlamaVisionModel(VisionModel):
                 f"Make sure Ollama is running: {e}"
             ) from e
     
+    def _strip_thinking_tags(self, content: str) -> str:
+        """Strip <think>...</think> tags and other reasoning blocks from content.
+        
+        Some models (like MiniCPM-V 4.5) include their reasoning process in the
+        response wrapped in <think> tags. This method removes those blocks and
+        returns only the actual response.
+        
+        Args:
+            content: Raw content that may contain thinking tags
+            
+        Returns:
+            Cleaned content with thinking blocks removed
+        """
+        import re
+        
+        if not content:
+            return content
+        
+        # Remove <think>...</think> blocks (including multiline)
+        # Use DOTALL flag so . matches newlines
+        cleaned = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Also handle unclosed <think> tags (model may have been cut off)
+        # Remove everything from <think> to end if no closing tag
+        cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Clean up any leftover whitespace
+        cleaned = cleaned.strip()
+        
+        # If we removed everything, the actual content might be after the think block
+        # or the model only produced thinking - log this
+        if content and not cleaned:
+            logger.warning(
+                "Content was entirely within <think> tags. "
+                "Model may need prompt adjustment to disable thinking mode."
+            )
+        
+        return cleaned
+    
     def _encode_image(self, image_path: str) -> str:
         """Encode image file to base64 string.
         
@@ -173,13 +212,13 @@ class LlamaVisionModel(VisionModel):
             
             # Validate and open image
             try:
+                # First verify the image is valid
                 with Image.open(image_path) as img:
-                    # Verify image is valid
                     img.verify()
-                    
-                    # Reopen for actual reading (verify() closes the image)
-                    img = Image.open(image_path)
-                    
+                
+                # Reopen for actual reading (verify() closes the image)
+                img = Image.open(image_path)
+                try:
                     # Convert HEIC to RGB if needed (HEIC may be in different color space)
                     if is_heic and img.mode not in ('RGB', 'RGBA'):
                         logger.debug(f"Converting HEIC image from {img.mode} to RGB")
@@ -187,16 +226,22 @@ class LlamaVisionModel(VisionModel):
                             # Create white background for RGBA
                             background = Image.new('RGB', img.size, (255, 255, 255))
                             background.paste(img, mask=img.split()[3] if img.mode == 'RGBA' else None)
+                            img.close()
                             img = background
                         else:
-                            img = img.convert('RGB')
+                            converted = img.convert('RGB')
+                            img.close()
+                            img = converted
                     
                     # Save to bytes in JPEG format for encoding
                     # This ensures compatibility and reduces size
                     from io import BytesIO
                     output = BytesIO()
-                    img.save(output, format='JPEG', quality=95)
+                    img.save(output, format='JPEG', quality=85)  # Reduced from 95 to save memory
                     image_data = output.getvalue()
+                    output.close()
+                finally:
+                    img.close()
                     
             except Exception as e:
                 error_msg = f"Invalid image format for {image_path}: {e}"
@@ -280,15 +325,70 @@ class LlamaVisionModel(VisionModel):
                 )
             
             message = response.get("message", {})
-            if "content" not in message:
-                raise VisionModelInvalidResponseError(
-                    f"Response missing content: {response}"
-                )
             
-            content = message["content"].strip()
+            # Handle response - check both content and thinking fields
+            # Some models (like Qwen3-VL) are "thinking" models that may put
+            # their response in the thinking field instead of content
+            content = ""
+            
+            # First try the standard content field
+            if hasattr(message, "content"):
+                content = message.content if message.content else ""
+            elif isinstance(message, dict) and "content" in message:
+                content = message["content"] or ""
+            
+            content = content.strip()
+            
+            # If content is empty, check for thinking field (for thinking models)
+            if not content:
+                thinking = None
+                if hasattr(message, "thinking"):
+                    thinking = message.thinking
+                elif isinstance(message, dict) and "thinking" in message:
+                    thinking = message.get("thinking")
+                
+                if thinking and isinstance(thinking, str):
+                    # Extract useful content from thinking - look for the actual description
+                    # Thinking often contains reasoning followed by the actual answer
+                    thinking = thinking.strip()
+                    logger.debug(f"Using thinking field content (model may be in thinking mode)")
+                    
+                    # Try to find a quoted description or the last complete sentence
+                    # that looks like an actual caption
+                    import re
+                    
+                    # Look for content in quotes (often the final answer)
+                    quoted = re.findall(r'"([^"]{20,})"', thinking)
+                    if quoted:
+                        content = quoted[-1]  # Use the last quoted string
+                    else:
+                        # Use the thinking content directly, but clean it up
+                        # Remove meta-commentary like "Got it, let's see" etc.
+                        lines = thinking.split('\n')
+                        useful_lines = []
+                        for line in lines:
+                            line = line.strip()
+                            # Skip meta-commentary
+                            if any(skip in line.lower() for skip in [
+                                "let's see", "got it", "need to", "make sure",
+                                "check", "first,", "so,", "identify"
+                            ]):
+                                continue
+                            if line and len(line) > 20:
+                                useful_lines.append(line)
+                        
+                        if useful_lines:
+                            content = useful_lines[-1]  # Use last substantial line
+                        else:
+                            content = thinking[:500]  # Fallback to truncated thinking
+            
+            # Clean up thinking tags from models that include them in content
+            # (e.g., MiniCPM-V 4.5 may include <think>...</think> blocks)
+            content = self._strip_thinking_tags(content)
+            
             if not content:
                 raise VisionModelInvalidResponseError(
-                    "Empty response from model"
+                    "Empty response from model (no content or thinking)"
                 )
             
             return content

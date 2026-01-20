@@ -461,6 +461,10 @@ class FaceRecognizer:
             # Convert to numpy array for face_recognition
             detection_array = np.array(detection_image)
             
+            # Close the detection image if it's different from original
+            if detection_image is not pil_image:
+                detection_image.close()
+            
             # Find all faces in the (possibly downscaled) image using configured model
             face_locations = face_recognition.face_locations(detection_array, model=self.model)
             
@@ -479,8 +483,15 @@ class FaceRecognizer:
                 # Use original image for encoding (better quality)
                 original_array = np.array(pil_image)
                 face_encodings = face_recognition.face_encodings(original_array, face_locations, model="large")
+                del original_array  # Free memory
             else:
                 face_encodings = face_recognition.face_encodings(detection_array, face_locations, model="large")
+            
+            # Free the detection array
+            del detection_array
+            
+            # Close the PIL image
+            pil_image.close()
             
             # Check if we have any encodings (use len() to avoid NumPy boolean ambiguity)
             if not face_encodings or len(face_encodings) == 0:
