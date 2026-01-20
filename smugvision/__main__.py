@@ -47,6 +47,16 @@ def setup_logging(verbose: bool = False) -> None:
     root_logger.setLevel(level)
     root_logger.addHandler(console_handler)
     
+    # Silence noisy HTTP libraries (even in verbose mode)
+    for noisy_logger in [
+        "urllib3",
+        "httpcore",
+        "httpx",
+        "requests",
+        "charset_normalizer",
+    ]:
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+    
     # Also log to file if configured
     try:
         config = ConfigManager.load(interactive=False)

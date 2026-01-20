@@ -106,21 +106,32 @@ def preview_status():
             for event in service.process_preview(job_id, force_reprocess):
                 event_type = event.get("event", "message")
                 event_data = json.dumps(event.get("data", {}))
+                logger.debug(f"SSE sending event: {event_type}")
+                # SSE format: event type, data, then double newline
                 yield f"event: {event_type}\ndata: {event_data}\n\n"
+            
+            logger.info("SSE stream completed - all events sent")
+        except GeneratorExit:
+            # Client disconnected
+            logger.info("SSE client disconnected")
         except Exception as e:
             logger.error(f"SSE stream error: {e}", exc_info=True)
             error_data = json.dumps({"message": str(e)})
             yield f"event: error\ndata: {error_data}\n\n"
     
-    return Response(
+    response = Response(
         generate(),
         mimetype="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
         }
     )
+    response.implicit_sequence_conversion = False
+    return response
 
 
 @api_bp.route("/preview/results", methods=["GET"])

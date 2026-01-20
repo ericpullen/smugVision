@@ -98,29 +98,43 @@ document.addEventListener('DOMContentLoaded', function() {
                 throw new Error(data.error || 'Failed to create preview job');
             }
             
+            // Store job_id for use in event handlers
+            const jobId = data.job_id;
+            
             statusTitle.textContent = `Processing: ${data.album_name}`;
             statusText.textContent = `0 / ${data.total_images} images`;
             
             // Connect to SSE for progress
             const eventSource = new EventSource(
-                `/api/preview/status?job_id=${data.job_id}&force_reprocess=${forceReprocess}`
+                `/api/preview/status?job_id=${jobId}&force_reprocess=${forceReprocess}`
             );
             
             eventSource.addEventListener('progress', function(e) {
+                console.log('SSE progress event:', e.data);
                 const progress = JSON.parse(e.data);
                 progressBar.value = progress.percent;
                 statusText.textContent = `${progress.current} / ${progress.total}: ${progress.filename}`;
             });
             
+            eventSource.addEventListener('image_complete', function(e) {
+                console.log('SSE image_complete event:', e.data);
+            });
+            
             eventSource.addEventListener('complete', function(e) {
+                console.log('SSE complete event received:', e.data);
                 const result = JSON.parse(e.data);
                 eventSource.close();
                 
-                // Redirect to preview page
-                window.location.href = `/preview/${data.job_id}`;
+                // Redirect to preview page (use setTimeout to ensure we're out of SSE context)
+                const previewUrl = `/preview/${jobId}`;
+                console.log('Redirecting to:', previewUrl);
+                setTimeout(function() {
+                    window.location.href = previewUrl;
+                }, 100);
             });
             
             eventSource.addEventListener('error', function(e) {
+                console.log('SSE error event:', e);
                 if (e.data) {
                     const error = JSON.parse(e.data);
                     showError(error.message);
@@ -129,8 +143,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 resetForm();
             });
             
+            // Also listen for generic message events
+            eventSource.onmessage = function(e) {
+                console.log('SSE generic message:', e.data);
+            };
+            
             eventSource.onerror = function(e) {
+                console.log('SSE connection error, readyState:', eventSource.readyState);
                 if (eventSource.readyState === EventSource.CLOSED) {
+                    console.log('EventSource closed normally');
                     return; // Normal close
                 }
                 showError('Connection lost. Please try again.');

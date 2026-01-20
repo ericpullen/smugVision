@@ -1,5 +1,6 @@
 """Main image processing orchestrator."""
 
+import gc
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 from dataclasses import dataclass
@@ -192,9 +193,13 @@ class ImageProcessor:
             marker_tag=config.get("processing.marker_tag", "smugvision")
         )
         
+        # Store vision model parameters from config
+        self.vision_temperature = config.get("vision.temperature", 0.7)
+        self.vision_max_tokens = config.get("vision.max_tokens", 500)
+        
         logger.info(
             f"ImageProcessor initialized: model={self.vision.model_name}, "
-            f"dry_run={dry_run}"
+            f"max_tokens={self.vision_max_tokens}, dry_run={dry_run}"
         )
     
     def process_album(
@@ -417,7 +422,9 @@ class ImageProcessor:
             )
             ai_caption = self.vision.generate_caption(
                 image_path=str(image_path),
-                prompt=caption_prompt
+                prompt=caption_prompt,
+                temperature=self.vision_temperature,
+                max_tokens=self.vision_max_tokens
             )
             
             # Generate tags
@@ -429,7 +436,9 @@ class ImageProcessor:
             )
             ai_tags = self.vision.generate_tags(
                 image_path=str(image_path),
-                prompt=tags_prompt
+                prompt=tags_prompt,
+                temperature=self.vision_temperature,
+                max_tokens=self.vision_max_tokens
             )
             
             # Format metadata
@@ -483,6 +492,10 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"Error processing {image.file_name}: {e}", exc_info=True)
             result.error = str(e)
+        finally:
+            # Force garbage collection after each image to keep memory usage low
+            # This is important because image processing creates large temporary objects
+            gc.collect()
         
         result.processing_time = time.time() - start_time
         return result
