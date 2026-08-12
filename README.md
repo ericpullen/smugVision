@@ -343,10 +343,15 @@ smugVision can extract GPS coordinates from EXIF data and convert them to readab
 
 - **Geocoding Provider**: Uses Nominatim (OpenStreetMap) by default
 - **Custom User Agent**: Configure in `~/.smugvision/geocoding_config.yaml`
-- **Rate Limiting**: Respects Nominatim's usage policy (1 request/second)
-- **Caching**: not implemented on the live path — the same coordinates are reverse
-  geocoded once per photo (see `TIMING_ANALYSIS.md`). `~/.smugvision/locations.yaml`
-  is the way to skip lookups for places you shoot often.
+- **Rate Limiting**: **not enforced** — there is no delay between requests, so an album
+  with many distinct coordinates will issue them as fast as it can. Nominatim's usage
+  policy asks for one request per second; caching (below) is what keeps real-world
+  volume low, not throttling.
+- **Caching**: results are memoized for the life of the process against coordinates
+  rounded to ~11m, so an album shot at one venue costs one lookup instead of one per
+  photo (measured: ~27s → 0.48s for 40 photos). Failed lookups are cached too;
+  `clear_geocode_cache()` resets, `geocode_cache_info()` reports hits/misses.
+  `~/.smugvision/locations.yaml` skips the network entirely for places you shoot often.
 
 ### Relationship Context
 

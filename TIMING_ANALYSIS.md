@@ -135,11 +135,16 @@ tried meant 20+ calls × 5s = 100s+.
 ### Original recommendations
 
 1. Use a single Overpass/Nominatim query instead of per-venue-type searches — **shipped**
-2. Cache results so the same coordinates are not resolved twice — **not done**. The only
-   `_geocode_cache` in the tree is in `smugvision/utils/exif_optimized.py`, which nothing
-   imports. The live path, `utils/exif.py::reverse_geocode()`, builds a fresh `Nominatim`
-   geolocator and reverse-geocodes on **every** call, so an album of N photos shot at one
-   venue still costs N reverse lookups plus N Overpass queries.
+2. Cache results so the same coordinates are not resolved twice — **shipped**.
+   `utils/exif.py::reverse_geocode()` memoizes for the life of the process against
+   coordinates rounded to `GEOCODE_CACHE_PRECISION` (4 places, ~11m), so an album shot at
+   one venue costs one reverse lookup instead of N. Measured on a real coordinate from
+   `~/.smugvision/cache`: **0.67s per uncached call, so a 40-photo single-venue album went
+   from ~27s to 0.48s** (39 hits, 0.12ms total). Failures are cached too, so an
+   unresolvable coordinate no longer re-times-out once per photo; call
+   `clear_geocode_cache()` to retry after a transient outage. Inspect with
+   `geocode_cache_info()`. Note the unimported `utils/exif_optimized.py` still carries its
+   own separate `_geocode_cache` — it remains dead code, now redundant as well.
 3. Reduce the 5s per-venue timeout — **moot**, the loop is gone
 4. Limit the venue type list — **moot**, the loop is gone
 5. Parallelize with `ThreadPoolExecutor` — **not done**, no longer needed

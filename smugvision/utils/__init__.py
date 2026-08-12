@@ -5,6 +5,8 @@ from smugvision.utils.exif import (
     reverse_geocode,
     resolve_location_with_custom,
     get_location_for_image,
+    clear_geocode_cache,
+    geocode_cache_info,
     ExifLocation,
 )
 
@@ -22,6 +24,8 @@ __all__ = [
     "reverse_geocode",
     "resolve_location_with_custom",
     "get_location_for_image",
+    "clear_geocode_cache",
+    "geocode_cache_info",
     "ExifLocation",
     # Custom location utilities
     "LocationResolver",

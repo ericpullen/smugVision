@@ -134,8 +134,16 @@ Per-image pipeline in `process_image()`:
   `ImportError`, when its models are missing, which is why the guard catches both — and a missing
   reference dir degrades to "face recognition disabled" rather than failing.
 - `utils/exif.py` is the live geocoding path (reads `~/.smugvision/geocoding_config.yaml`).
-  `utils/exif_optimized.py` is a faster alternative that **nothing imports** — dead code, not a
-  dependency.
+  `reverse_geocode()` is a caching wrapper over `_reverse_geocode_uncached()`: results are
+  memoized for the life of the process against coordinates rounded to
+  `GEOCODE_CACHE_PRECISION` (4 places, ~11m), capped at `GEOCODE_CACHE_MAX_ENTRIES` with
+  FIFO eviction, lock-guarded. **Failures are cached too** — deliberately, so an
+  unresolvable coordinate does not re-time-out once per photo; `clear_geocode_cache()`
+  retries and `geocode_cache_info()` reports hits/misses. Anything that needs a live lookup
+  must call `_reverse_geocode_uncached()` explicitly. There is **no** rate limiting despite
+  what Nominatim's usage policy asks; the cache is what keeps request volume down.
+  `utils/exif_optimized.py` is a faster alternative that **nothing imports** — dead code,
+  not a dependency, and its separate `_geocode_cache` is now redundant too.
 - `web/` — Flask app factory + two blueprints (`pages_bp`, `api_bp` at `/api`). `PreviewService`
   wraps the *same* `ImageProcessor` with `dry_run=True` and streams SSE progress; results are held
   in an in-memory job dict (max 5 jobs) and written only when `POST /api/commit` runs. Keep new
