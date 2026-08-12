@@ -58,26 +58,36 @@ class MetadataFormatter:
         if ai_caption:
             caption_text = ai_caption.strip()
 
-            # Add person names if identified
+            # Add person names, but only those the model did not already name itself.
+            # Vision models are given the recognized names as prompt context and now
+            # usually work them into the sentence, so appending them unconditionally
+            # produced "Eric Pullen smiles ... Featuring Eric Pullen."
             if person_names:
-                names_str = self._format_person_names(person_names)
-                # Insert person names naturally into caption
-                # If caption starts with "A photo of" or similar, insert after it
-                if caption_text.lower().startswith(("a photo", "an image", "a picture")):
-                    # Find the end of the first phrase
-                    if " of " in caption_text.lower()[:20]:
-                        insert_pos = caption_text.lower().index(" of ") + 4
-                        caption_text = (
-                            caption_text[:insert_pos] + names_str + " " + caption_text[insert_pos:]
-                        )
+                unmentioned = [
+                    name for name in person_names if not self._mentions(caption_text, name)
+                ]
+                if unmentioned:
+                    names_str = self._format_person_names(unmentioned)
+                    # Insert person names naturally into caption
+                    # If caption starts with "A photo of" or similar, insert after it
+                    if caption_text.lower().startswith(("a photo", "an image", "a picture")):
+                        # Find the end of the first phrase
+                        if " of " in caption_text.lower()[:20]:
+                            insert_pos = caption_text.lower().index(" of ") + 4
+                            caption_text = (
+                                caption_text[:insert_pos]
+                                + names_str
+                                + " "
+                                + caption_text[insert_pos:]
+                            )
+                        else:
+                            caption_text = f"{caption_text} Featuring {names_str}."
                     else:
+                        # Append person names
                         caption_text = f"{caption_text} Featuring {names_str}."
-                else:
-                    # Append person names
-                    caption_text = f"{caption_text} Featuring {names_str}."
 
             # Add location if available and not already in caption
-            if location and location.lower() not in caption_text.lower():
+            if location and not self._mentions_location(caption_text, location):
                 # Check if caption already ends with location-like text
                 if not caption_text.rstrip(".").endswith(("at", "in", "near", "from")):
                     caption_text = f"{caption_text.rstrip('.')} at {location}."
@@ -145,6 +155,43 @@ class MetadataFormatter:
 
         logger.debug(f"Formatted {len(unique_tags)} tags (including marker)")
         return unique_tags
+
+    @staticmethod
+    def _mentions(text: str, needle: str) -> bool:
+        """Test whether text already contains a name or place, case-insensitively.
+
+        Args:
+            text: Caption text to search
+            needle: Person name or place name to look for
+
+        Returns:
+            True if ``needle`` appears in ``text``
+        """
+        return bool(needle) and needle.lower() in text.lower()
+
+    @classmethod
+    def _mentions_location(cls, text: str, location: str) -> bool:
+        """Test whether a caption already names a location.
+
+        The full location string rarely matches verbatim: geocoding yields
+        "Louisville Zoo, Louisville, Kentucky" while a model writes "at the Louisville
+        Zoo in Louisville, Kentucky". Comparing only the whole string therefore let the
+        venue be appended a second time. The first comma-separated component is the
+        specific, informative part, so it is checked as well.
+
+        Args:
+            text: Caption text to search
+            location: Resolved location string, possibly comma-separated
+
+        Returns:
+            True if the caption already names this location
+        """
+        if cls._mentions(text, location):
+            return True
+        primary = location.split(",")[0].strip()
+        # Ignore very short leading components; matching a 2-3 character token would
+        # produce false positives against ordinary words.
+        return len(primary) > 3 and cls._mentions(text, primary)
 
     def _format_person_names(self, names: List[str]) -> str:
         """Format list of person names for natural language.
