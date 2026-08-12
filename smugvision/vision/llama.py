@@ -756,11 +756,18 @@ class LlamaVisionModel(VisionModel):
         person_names: Optional[List[str]] = None,
         total_faces: Optional[int] = None,
         album_name: Optional[str] = None,
+        hints: Optional[str] = None,
     ) -> str:
-        """Enhance a prompt with album, location, people and relationship context.
+        """Enhance a prompt with album, location, people, relationship and hint context.
 
         Context is expected to arrive as arguments rather than pre-baked into
         ``prompt``; passing it both ways sends the model duplicate information.
+
+        Hints are handled separately from the rest of the context and appended as the
+        final paragraph of the returned string. Two reasons: the shared context block
+        ends with "Please incorporate this information naturally", which is exactly the
+        wrong framing for a fact the model must not second-guess, and being last makes
+        the hint the most recent instruction the model reads.
 
         Args:
             prompt: Original prompt text
@@ -771,10 +778,14 @@ class LlamaVisionModel(VisionModel):
             total_faces: Optional count of faces detected, which may exceed the number
                 of recognized names
             album_name: Optional album name
+            hints: Optional user-asserted facts about the photo, already combined across
+                scopes by ``HintManager.resolve``. Injected as ground truth outranking
+                the model's own visual reading. ``None`` or blank adds nothing at all.
 
         Returns:
             Enhanced prompt with context naturally incorporated
         """
+        hint_text = (hints or "").strip()
         context_parts = []
 
         # Add album context if available
@@ -851,44 +862,62 @@ class LlamaVisionModel(VisionModel):
         if location_context:
             context_parts.append(f"This image was taken at {location_context}.")
 
-        if not context_parts:
+        # A hint alone is reason enough to enhance the prompt, and it is the case the
+        # feature exists for: a photo with no album name, no location and no recognized
+        # face still needs to be told that the white ribbed object is a dog chew.
+        if not context_parts and not hint_text:
             return prompt
 
-        # Combine all context
-        context_text = " ".join(context_parts)
+        enhanced = prompt
 
-        # Check if prompt already mentions location or people
-        has_context_mention = any(
-            keyword.lower() in prompt.lower()
-            for keyword in [
-                "location",
-                "where",
-                "place",
-                "taken",
-                "exif",
-                "person",
-                "people",
-                "who",
-            ]
-        )
+        if context_parts:
+            # Combine all context
+            context_text = " ".join(context_parts)
 
-        if has_context_mention:
-            # If prompt already mentions context, append it
-            enhanced = (
-                f"{prompt}\n\nAdditional context: {context_text} "
-                f"Please incorporate this information naturally."
+            # Check if prompt already mentions location or people
+            has_context_mention = any(
+                keyword.lower() in prompt.lower()
+                for keyword in [
+                    "location",
+                    "where",
+                    "place",
+                    "taken",
+                    "exif",
+                    "person",
+                    "people",
+                    "who",
+                ]
             )
-        else:
-            # Otherwise, add it as context with explicit instruction
+
+            if has_context_mention:
+                # If prompt already mentions context, append it
+                enhanced = (
+                    f"{prompt}\n\nAdditional context: {context_text} "
+                    f"Please incorporate this information naturally."
+                )
+            else:
+                # Otherwise, add it as context with explicit instruction
+                enhanced = (
+                    f"{prompt}\n\nContext: {context_text} "
+                    f"Please incorporate this information naturally into your description, "
+                    f"including using the person's name when referring to them."
+                )
+
+        # Hints go last, and are framed as fact rather than as context to weave in. The
+        # model's own reading of the pixels is the thing being corrected here, so the
+        # wording has to say outright which side wins.
+        if hint_text:
             enhanced = (
-                f"{prompt}\n\nContext: {context_text} "
-                f"Please incorporate this information naturally into your description, "
-                f"including using the person's name when referring to them."
+                f"{enhanced}\n\nKnown facts about this photo, stated by the person who "
+                f"took it. These are correct and take precedence over your own visual "
+                f"interpretation - if what you see appears to disagree, trust these "
+                f"facts and describe the photo accordingly: {hint_text}"
             )
 
         logger.debug(
             f"Enhanced prompt with context: album={album_name}, location={location_context}, "
-            f"people={person_names}, total_faces={total_faces}"
+            f"people={person_names}, total_faces={total_faces}, "
+            f"hints={hint_text[:80] if hint_text else None}"
         )
         return enhanced
 
@@ -1255,6 +1284,7 @@ class LlamaVisionModel(VisionModel):
         person_names: Optional[List[str]] = None,
         total_faces: Optional[int] = None,
         album_name: Optional[str] = None,
+        hints: Optional[str] = None,
     ) -> MetadataResult:
         """Generate a caption and keyword tags for an image.
 
@@ -1280,6 +1310,9 @@ class LlamaVisionModel(VisionModel):
             total_faces: Optional count of detected faces, which may exceed the number
                 of recognized names
             album_name: Optional album name
+            hints: Optional user-asserted facts about the photo, already combined across
+                scopes. Injected last, as ground truth outranking the model's own visual
+                reading. Reaches both the single-call and two-call paths.
 
         Returns:
             MetadataResult with the caption, tags, model name and elapsed time
@@ -1316,6 +1349,7 @@ class LlamaVisionModel(VisionModel):
                     person_names=person_names,
                     total_faces=total_faces,
                     album_name=album_name,
+                    hints=hints,
                 )
             else:
                 caption, tags = self._generate_two_calls(
@@ -1328,6 +1362,7 @@ class LlamaVisionModel(VisionModel):
                     person_names=person_names,
                     total_faces=total_faces,
                     album_name=album_name,
+                    hints=hints,
                 )
         except VisionModelError:
             raise
@@ -1362,6 +1397,7 @@ class LlamaVisionModel(VisionModel):
         person_names: Optional[List[str]],
         total_faces: Optional[int],
         album_name: Optional[str],
+        hints: Optional[str] = None,
     ) -> Tuple[str, List[str]]:
         """Run one chat request covering everything that was requested.
 
@@ -1377,6 +1413,7 @@ class LlamaVisionModel(VisionModel):
             person_names: Optional recognized person names
             total_faces: Optional detected face count
             album_name: Optional album name
+            hints: Optional user-asserted facts, injected last as ground truth
 
         Returns:
             Tuple of (caption, tags)
@@ -1385,7 +1422,7 @@ class LlamaVisionModel(VisionModel):
             caption_instruction, tags_instruction, structured=self.structured_output
         )
         prompt = self._enhance_prompt_with_context(
-            prompt, location_context, person_names, total_faces, album_name
+            prompt, location_context, person_names, total_faces, album_name, hints
         )
         self._log_prompt("metadata", prompt)
 
@@ -1483,6 +1520,7 @@ class LlamaVisionModel(VisionModel):
         person_names: Optional[List[str]],
         total_faces: Optional[int],
         album_name: Optional[str],
+        hints: Optional[str] = None,
     ) -> Tuple[str, List[str]]:
         """Legacy path: one request for the caption, one for the tags.
 
@@ -1499,6 +1537,8 @@ class LlamaVisionModel(VisionModel):
             person_names: Optional recognized person names
             total_faces: Optional detected face count
             album_name: Optional album name
+            hints: Optional user-asserted facts. Both requests receive them, for the
+                same reason both receive the rest of the context.
 
         Returns:
             Tuple of (caption, tags)
@@ -1507,7 +1547,7 @@ class LlamaVisionModel(VisionModel):
             caption_instruction, "", structured=self.structured_output
         )
         caption_prompt = self._enhance_prompt_with_context(
-            caption_prompt, location_context, person_names, total_faces, album_name
+            caption_prompt, location_context, person_names, total_faces, album_name, hints
         )
         self._log_prompt("caption", caption_prompt)
 
@@ -1524,7 +1564,7 @@ class LlamaVisionModel(VisionModel):
         )
         # Defect fix: the tags request gets the same context as the caption request.
         tags_prompt = self._enhance_prompt_with_context(
-            tags_prompt, location_context, person_names, total_faces, album_name
+            tags_prompt, location_context, person_names, total_faces, album_name, hints
         )
         self._log_prompt("tags", tags_prompt)
 

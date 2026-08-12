@@ -2,7 +2,8 @@
 
 import logging
 from pathlib import Path
-from flask import Flask
+from flask import Flask, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 from ..config import ConfigManager
 
@@ -47,7 +48,26 @@ def create_app(config_path: str = None, debug: bool = False) -> Flask:
     
     app.register_blueprint(pages_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
-    
+
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(error: HTTPException):
+        """Return JSON for API errors Flask itself raises.
+
+        Covers the cases no route handler sees - an unknown /api path, a wrong HTTP
+        method, an unparseable request body - so an API client never has to guess
+        whether a failure came back as HTML.
+
+        Args:
+            error: The HTTP exception Flask raised
+
+        Returns:
+            JSON {"error": ...} with the original status for /api paths; the default
+            HTML response for pages
+        """
+        if request.path.startswith("/api/"):
+            return jsonify({"error": error.description}), error.code or 500
+        return error
+
     logger.info("smugVision web app created")
-    
+
     return app

@@ -95,6 +95,16 @@ DEFAULT_CONFIG = {
         "check_custom_first": True,
         "use_aliases_as_tags": True,
     },
+    # Hint Configuration
+    # Hints are facts about a photo that the model cannot see for itself, asserted by
+    # the person who took it and injected into the prompt as ground truth. They exist
+    # because a vision model describes what a photo looks like, not what it is: a ribbed
+    # white Nylabone dog chew is a perfectly reasonable "long cracker" if you have never
+    # seen one. Scopes are global / per-album / per-image, all in one YAML file.
+    "hints": {
+        "enabled": True,
+        "file": str(Path.home() / ".smugvision" / "hints.yaml"),
+    },
     # Prompt Configuration
     "prompts": {
         # The "who is doing what" clause is load-bearing. Without it, models reach for the

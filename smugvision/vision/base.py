@@ -67,6 +67,7 @@ class VisionModel(ABC):
         person_names: Optional[List[str]] = None,
         total_faces: Optional[int] = None,
         album_name: Optional[str] = None,
+        hints: Optional[str] = None,
     ) -> MetadataResult:
         """Generate a caption and keyword tags for an image in a single pass.
 
@@ -94,6 +95,10 @@ class VisionModel(ABC):
             total_faces: Optional count of faces detected in the image, which may be
                 larger than ``len(person_names)`` when some faces are unrecognized
             album_name: Optional album name to use as additional context
+            hints: Optional user-asserted facts about this photo, already resolved from
+                every applicable scope. Implementations must treat this as ground truth
+                that outranks the model's own visual interpretation, and must inject it
+                last so nothing later in the prompt dilutes it.
 
         Returns:
             MetadataResult populated with the caption, tags, model name and elapsed time

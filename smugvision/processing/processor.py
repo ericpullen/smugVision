@@ -15,6 +15,7 @@ from ..vision import VisionModelFactory
 from ..vision.base import VisionModel
 from ..utils.exif import extract_exif_location, resolve_location_with_custom
 from ..face.recognizer import FaceRecognizer
+from .hints import HintManager
 from .metadata import MetadataFormatter
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,7 @@ class ImageProcessor:
         vision_model: Optional[VisionModel] = None,
         cache_manager: Optional[CacheManager] = None,
         face_recognizer: Optional[FaceRecognizer] = None,
+        hint_manager: Optional[HintManager] = None,
         dry_run: bool = False,
         preserve_existing: Optional[bool] = None,
     ) -> None:
@@ -125,6 +127,8 @@ class ImageProcessor:
             vision_model: Vision model for caption/tag generation (created if not provided)
             cache_manager: Cache manager (created if not provided)
             face_recognizer: Face recognizer (created if not provided)
+            hint_manager: Hint manager for user-asserted facts (created if not provided,
+                unless ``hints.enabled`` is false, in which case hints are off entirely)
             dry_run: If True, don't update SmugMug
             preserve_existing: Overrides ``processing.preserve_existing`` for this run.
                 ``None`` (the default) uses the configured value. ``False`` replaces the
@@ -238,6 +242,29 @@ class ImageProcessor:
                         )
                 except Exception as e:
                     logger.warning(f"Could not initialize face recognizer: {e}")
+
+        # Initialize hint manager. Hints are facts the model cannot see for itself
+        # (that the white ribbed object is a dog chew, not a cracker), resolved per
+        # image from the global / album / image scopes in ~/.smugvision/hints.yaml.
+        # Gated the same way as face recognition: the config switch wins, and an
+        # injected manager is used in place of building one.
+        self.hints: Optional[HintManager] = None
+        if config.get("hints.enabled", True):
+            if hint_manager:
+                self.hints = hint_manager
+            else:
+                try:
+                    self.hints = HintManager(config.get("hints.file"))
+                except Exception as e:
+                    # A hint is an optimization, never a reason to lose a run.
+                    logger.warning(f"Could not initialize hint manager: {e}")
+            if self.hints:
+                logger.info(
+                    f"Hints enabled: {self.hints.hint_count} hint(s) from "
+                    f"{self.hints.hints_file}"
+                )
+        else:
+            logger.debug("Hints disabled by config (hints.enabled=false)")
 
         # Initialize metadata formatter. An explicit preserve_existing argument (from
         # --preserve-existing / --no-preserve-existing) overrides the configured value
@@ -489,6 +516,19 @@ class ImageProcessor:
             caption_instruction = self.config.get("prompts.caption", DEFAULT_CAPTION_PROMPT)
             tags_instruction = self.config.get("prompts.tags", DEFAULT_TAGS_PROMPT)
 
+            # Resolve user-asserted hints for this image (global + album + image scopes).
+            # album.album_key is used deliberately: AlbumImage.album_key is empty for
+            # images fetched one at a time via SmugMugClient.get_image(), which would
+            # make per-album hints vanish in exactly the single-image re-run path.
+            hints_text = ""
+            if self.hints:
+                try:
+                    hints_text = self.hints.resolve(album.album_key, image.image_key)
+                except Exception as e:
+                    logger.warning(f"Could not resolve hints for {image.file_name}: {e}")
+                if hints_text:
+                    logger.info(f"  Hints applied: {hints_text}")
+
             # One call, whatever the request shape. `vision.single_call` decides whether the
             # vision layer issues one request or two; that is a request-shaping detail it
             # owns, so context (album, location, people, relationships.yaml) is passed as
@@ -503,6 +543,7 @@ class ImageProcessor:
                 person_names=raw_names,
                 total_faces=total_faces if self.face_recognizer else None,
                 album_name=album.name,
+                hints=hints_text or None,
             )
             ai_caption = metadata.caption
             ai_tags = list(metadata.tags)

@@ -1,218 +1,148 @@
 {% extends "base.html" %}
 
-{% block title %}smugVision - Process Album{% endblock %}
+{% block title %}smugVision - Choose an Album{% endblock %}
 
 {% block content %}
 <article>
     <header>
-        <h1>Process SmugMug Album</h1>
-        <p>Enter a SmugMug album URL to preview AI-generated metadata changes.</p>
+        <p class="eyebrow">Step 1</p>
+        <h1>Choose an album to proof</h1>
+        <p>
+            Browse your SmugMug galleries and pick an album. smugVision reads each
+            image with a local vision model and proposes a caption and keywords for
+            you to review. <strong>Nothing is written to SmugMug</strong> until you
+            confirm a write on the next screen.
+        </p>
     </header>
-    
-    <form id="preview-form">
-        <label for="album-url">
-            SmugMug Album URL
-            <input 
-                type="url" 
-                id="album-url" 
-                name="url" 
-                placeholder="https://yoursite.smugmug.com/.../n-XXXXX/album-name"
-                required
-            >
-        </label>
-        
-        <label for="force-reprocess">
-            <input type="checkbox" id="force-reprocess" name="force_reprocess">
-            Force reprocess images with existing marker tag
-        </label>
-        
-        <button type="submit" id="preview-btn">Preview Changes</button>
-    </form>
-    
-    <!-- Status section (hidden initially) -->
-    <div id="status-section" class="hidden">
-        <h3 id="status-title">Processing...</h3>
-        <progress id="progress-bar" value="0" max="100"></progress>
-        <p id="status-text">Initializing...</p>
+
+    <div class="browser-toolbar">
+        <nav aria-label="Gallery path" style="flex: 1 1 20rem; min-width: 0;">
+            <ol class="crumbs" id="crumbs">
+                <li><span aria-current="page">All Galleries</span></li>
+            </ol>
+        </nav>
+        <span class="mono muted" id="cache-note" aria-hidden="true"></span>
+        <button type="button" class="secondary" id="refresh-btn">Refresh</button>
     </div>
-    
-    <!-- Error section (hidden initially) -->
-    <div id="error-section" class="hidden" role="alert">
-        <h4>Error</h4>
-        <p id="error-message"></p>
-    </div>
+
+    {# Screen readers get the listing outcome here; the visual list follows. #}
+    <p class="visually-hidden" id="catalog-status" role="status" aria-live="polite"></p>
+    <p class="notice hidden" id="catalog-error" role="alert"></p>
+
+    <ul class="catalog" id="catalog">
+        <li class="catalog-loading">
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+        </li>
+    </ul>
+
+    <!-- Selected album + the run action. Hidden until an album is picked. -->
+    <section class="selection hidden" id="selection" aria-labelledby="selection-name">
+        <p class="eyebrow">Selected album</p>
+        <h3 id="selection-name"></h3>
+        <p class="selection-meta" id="selection-meta"></p>
+
+        <p class="notice hidden" id="selection-notice"></p>
+
+        <fieldset class="run-modes">
+            <legend>How should this run finish?</legend>
+
+            <label class="run-mode">
+                <input type="radio" name="run-mode" value="dry" checked>
+                <span>
+                    <span class="run-mode-title">Proof only &mdash; recommended</span>
+                    <span class="run-mode-note">
+                        Generate captions and keywords and show them for review.
+                        Nothing reaches SmugMug.
+                    </span>
+                </span>
+            </label>
+
+            <label class="run-mode is-write">
+                <input type="radio" name="run-mode" value="write">
+                <span>
+                    <span class="run-mode-title">Proof, then I intend to write</span>
+                    <span class="run-mode-note">
+                        Same run &mdash; this only opens the write panel on the proof
+                        sheet so it is ready. You still have to review the results,
+                        arm the latch and confirm before anything is written.
+                    </span>
+                </span>
+            </label>
+        </fieldset>
+
+        <div class="field">
+            <label class="check" for="force-reprocess">
+                <input type="checkbox" id="force-reprocess">
+                <span>
+                    Re-proof images that smugVision already tagged
+                    <span class="check-note">
+                        Off by default, so an album you have already processed is
+                        skipped instead of being redone.
+                    </span>
+                </span>
+            </label>
+        </div>
+
+        <div class="button-row">
+            <button type="button" class="primary-lg" id="run-btn">Proof this album</button>
+            <button type="button" class="quiet" id="clear-selection-btn">Clear selection</button>
+            <span class="dry-run-seal">Dry run &mdash; no writes</span>
+        </div>
+    </section>
+
+    <!-- Live progress for the running job. -->
+    <section class="run-progress hidden" id="run-progress" aria-labelledby="progress-title">
+        <h3 id="progress-title">Working…</h3>
+        <progress id="progress-bar" max="100"></progress>
+        <p class="progress-line" id="progress-line" role="status" aria-live="polite"></p>
+    </section>
+
+    <!-- Fallback: paste a URL. Kept because it is faster when you already
+         have the link, e.g. straight from the SmugMug address bar. -->
+    <details class="fallback">
+        <summary>Or paste an album URL instead</summary>
+        <div class="fallback-body">
+            <p class="muted">
+                Faster when you already have the link. Accepts the URL form
+                <code>.../n-XXXXX/album-name</code>. This runs exactly the same
+                dry-run proof as picking the album above.
+            </p>
+            <form id="url-form" novalidate>
+                <div class="field">
+                    <label for="album-url">SmugMug album URL</label>
+                    <input type="url" id="album-url" name="url" autocomplete="off"
+                           placeholder="https://yoursite.smugmug.com/Folder/n-XXXXX/album-name">
+                    <p class="field-hint">
+                        The album is resolved from the <code>n-XXXXX</code> node ID and
+                        the trailing slug.
+                    </p>
+                </div>
+                <div class="button-row">
+                    <button type="submit" class="secondary" id="url-btn">
+                        Proof album from URL
+                    </button>
+                    <span class="dry-run-seal">Dry run &mdash; no writes</span>
+                </div>
+                <p class="notice hidden" id="url-error" role="alert"
+                   style="margin-top: 0.75rem;"></p>
+            </form>
+        </div>
+    </details>
 </article>
 
-<!-- Service Status -->
 <article>
     <header>
-        <h3>Service Status</h3>
+        <h2>Service status</h2>
     </header>
     <div id="service-status">
-        <p>Loading...</p>
+        <p class="muted">Checking SmugMug, Ollama and face recognition…</p>
     </div>
 </article>
 {% endblock %}
 
 {% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('preview-form');
-    const statusSection = document.getElementById('status-section');
-    const statusTitle = document.getElementById('status-title');
-    const statusText = document.getElementById('status-text');
-    const progressBar = document.getElementById('progress-bar');
-    const errorSection = document.getElementById('error-section');
-    const errorMessage = document.getElementById('error-message');
-    const previewBtn = document.getElementById('preview-btn');
-    
-    // Load service status
-    loadServiceStatus();
-    
-    form.addEventListener('submit', async function(e) {
-        e.preventDefault();
-        
-        const url = document.getElementById('album-url').value;
-        const forceReprocess = document.getElementById('force-reprocess').checked;
-        
-        // Reset UI
-        errorSection.classList.add('hidden');
-        statusSection.classList.remove('hidden');
-        statusTitle.textContent = 'Creating preview job...';
-        statusText.textContent = 'Connecting to SmugMug...';
-        progressBar.value = 0;
-        previewBtn.disabled = true;
-        previewBtn.setAttribute('aria-busy', 'true');
-        
-        try {
-            // Create preview job
-            const response = await fetch('/api/preview', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({url, force_reprocess: forceReprocess})
-            });
-            
-            const data = await response.json();
-            
-            if (!response.ok) {
-                throw new Error(data.error || 'Failed to create preview job');
-            }
-            
-            // Store job_id for use in event handlers
-            const jobId = data.job_id;
-            
-            statusTitle.textContent = `Processing: ${data.album_name}`;
-            statusText.textContent = `0 / ${data.total_images} images`;
-            
-            // Connect to SSE for progress
-            const eventSource = new EventSource(
-                `/api/preview/status?job_id=${jobId}&force_reprocess=${forceReprocess}`
-            );
-            
-            eventSource.addEventListener('progress', function(e) {
-                console.log('SSE progress event:', e.data);
-                const progress = JSON.parse(e.data);
-                progressBar.value = progress.percent;
-                statusText.textContent = `${progress.current} / ${progress.total}: ${progress.filename}`;
-            });
-            
-            eventSource.addEventListener('image_complete', function(e) {
-                console.log('SSE image_complete event:', e.data);
-            });
-            
-            eventSource.addEventListener('complete', function(e) {
-                console.log('SSE complete event received:', e.data);
-                const result = JSON.parse(e.data);
-                eventSource.close();
-                
-                // Redirect to preview page (use setTimeout to ensure we're out of SSE context)
-                const previewUrl = `/preview/${jobId}`;
-                console.log('Redirecting to:', previewUrl);
-                setTimeout(function() {
-                    window.location.href = previewUrl;
-                }, 100);
-            });
-            
-            eventSource.addEventListener('error', function(e) {
-                console.log('SSE error event:', e);
-                if (e.data) {
-                    const error = JSON.parse(e.data);
-                    showError(error.message);
-                }
-                eventSource.close();
-                resetForm();
-            });
-            
-            // Also listen for generic message events
-            eventSource.onmessage = function(e) {
-                console.log('SSE generic message:', e.data);
-            };
-            
-            eventSource.onerror = function(e) {
-                console.log('SSE connection error, readyState:', eventSource.readyState);
-                if (eventSource.readyState === EventSource.CLOSED) {
-                    console.log('EventSource closed normally');
-                    return; // Normal close
-                }
-                showError('Connection lost. Please try again.');
-                eventSource.close();
-                resetForm();
-            };
-            
-        } catch (error) {
-            showError(error.message);
-            resetForm();
-        }
-    });
-    
-    function showError(message) {
-        errorSection.classList.remove('hidden');
-        errorMessage.textContent = message;
-        statusSection.classList.add('hidden');
-    }
-    
-    function resetForm() {
-        previewBtn.disabled = false;
-        previewBtn.removeAttribute('aria-busy');
-    }
-    
-    async function loadServiceStatus() {
-        const statusDiv = document.getElementById('service-status');
-        
-        try {
-            const response = await fetch('/api/status');
-            const status = await response.json();
-            
-            let html = '<dl>';
-            
-            // SmugMug status
-            const smugmugOk = status.smugmug === 'connected';
-            html += `<dt>SmugMug</dt>
-                     <dd class="${smugmugOk ? 'status-ok' : 'status-error'}">
-                         ${smugmugOk ? '✓' : '✗'} ${status.smugmug}
-                     </dd>`;
-            
-            // Vision model status
-            const visionOk = status.vision_model && status.vision_model.includes('connected');
-            html += `<dt>Vision Model</dt>
-                     <dd class="${visionOk ? 'status-ok' : 'status-warn'}">
-                         ${visionOk ? '✓' : '⚠'} ${status.vision_model}
-                     </dd>`;
-            
-            // Face recognition status
-            const faceOk = status.face_recognition && status.face_recognition.includes('enabled');
-            html += `<dt>Face Recognition</dt>
-                     <dd class="${faceOk ? 'status-ok' : 'status-info'}">
-                         ${faceOk ? '✓' : 'ℹ'} ${status.face_recognition}
-                     </dd>`;
-            
-            html += '</dl>';
-            statusDiv.innerHTML = html;
-            
-        } catch (error) {
-            statusDiv.innerHTML = `<p class="status-error">Failed to load status: ${error.message}</p>`;
-        }
-    }
-});
-</script>
+<script src="{{ url_for('static', filename='js/gallery.js') }}"></script>
 {% endblock %}

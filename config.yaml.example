@@ -130,6 +130,30 @@ location:
   check_custom_first: true           # Check custom locations before reverse geocoding
   use_aliases_as_tags: true          # Add location aliases as keyword tags
 
+# Hint Configuration
+# Hints are facts about a photo that the model cannot see for itself. A vision model
+# describes what a photo looks like, not what it is - a ribbed white Nylabone dog chew
+# is a perfectly reasonable "long cracker" if you have never seen one. Write the fact
+# down once and every future caption of that photo respects it.
+#
+# Hints are injected into the prompt as ground truth and OUTRANK what the model thinks
+# it sees, so keep them factual. A wrong hint produces a confidently wrong caption.
+#
+# ~/.smugvision/hints.yaml holds three scopes, applied most-general-first:
+#
+#   global: "Biscuit is a black Labrador."      # every photo
+#   albums:
+#     Ab3kZq: "Biscuit's 7th birthday party."   # one album, by album key
+#   images:
+#     Xy7NpQr: "The white ribbed object is a Nylabone dog chew."   # one image
+#
+# The file is created on first write, is safe to edit by hand, and is optional - if it
+# is missing, nothing changes. Both the CLI and the web UI read it, so a hint added in
+# one takes effect in the other.
+hints:
+  enabled: true                      # Set false to ignore hints.yaml entirely
+  file: "~/.smugvision/hints.yaml"   # Path to the hints file
+
 # Prompt Configuration
 # Customize these prompts to change how the AI describes your images.
 # The values below are the shipped defaults (smugvision/config/defaults.py).
