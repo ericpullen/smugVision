@@ -1,6 +1,6 @@
 """Metadata formatting utilities for combining AI-generated content with context."""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -163,37 +163,3 @@ class MetadataFormatter:
             return f"{names[0]} and {names[1]}"
         # Three or more names
         return ", ".join(names[:-1]) + f", and {names[-1]}"
-
-    def create_update_payload(
-        self, caption: str, tags: List[str], title: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Create a SmugMug API update payload.
-
-        Not used by the write path: ImageProcessor and PreviewService both call
-        SmugMugClient.update_image_metadata(image_key, caption=..., keywords=...),
-        which builds the PATCH body itself and joins the keyword list into the
-        comma-separated string the API expects. This helper is retained for callers
-        that need the raw body, and it keeps Keywords as a LIST - convert it before
-        sending it to SmugMug.
-
-        Args:
-            caption: Formatted caption
-            tags: List of tags (including marker)
-            title: Optional title for the image
-
-        Returns:
-            Dictionary of SmugMug field names to values
-        """
-        payload = {}
-
-        if caption:
-            payload["Caption"] = caption
-
-        if tags:
-            payload["Keywords"] = tags
-
-        if title:
-            payload["Title"] = title
-
-        logger.debug(f"Created update payload with {len(payload)} fields")
-        return payload

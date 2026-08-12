@@ -48,6 +48,19 @@ from smugvision.vision.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# Accepted JSON keys for each generated field, in preference order. Models vary in what
+# they name these, so every place that reads, sniffs for, or salvages a field derives its
+# vocabulary from HERE -- previously four hand-written lists had already diverged
+# ("summary" and "keyword_tags" parsed normally but were unsalvageable from truncated
+# JSON, and "labels" was the reverse).
+CAPTION_KEYS: Tuple[str, ...] = ("caption", "description", "text", "summary")
+TAG_KEYS: Tuple[str, ...] = ("tags", "keywords", "keyword_tags", "labels")
+
+# Regex alternations built from the tables above, so the salvage patterns can never
+# drift from the strict parser's vocabulary.
+_CAPTION_KEY_ALT = "|".join(CAPTION_KEYS)
+_TAG_KEY_ALT = "|".join(TAG_KEYS)
+
 # Ollama accepts think as a bool, or one of "low" / "medium" / "high", or None.
 ThinkSetting = Union[bool, str, None]
 
@@ -691,6 +704,25 @@ class LlamaVisionModel(VisionModel):
         return "\n\n".join(parts)
 
     @staticmethod
+    def _join_names(names: List[str], *, oxford: bool = True) -> str:
+        """Join person names into a natural-language list.
+
+        Args:
+            names: Display names, already underscore-converted
+            oxford: Whether three-or-more names take an Oxford comma before "and".
+                The relationship wording has historically omitted it.
+
+        Returns:
+            "Ann", "Ann and Bob", or "Ann, Bob, and Cid" / "Ann, Bob and Cid"
+        """
+        if len(names) == 1:
+            return names[0]
+        if len(names) == 2:
+            return f"{names[0]} and {names[1]}"
+        tail = f", and {names[-1]}" if oxford else f" and {names[-1]}"
+        return ", ".join(names[:-1]) + tail
+
+    @staticmethod
     def _clean_album_name(album_name: str) -> str:
         """Strip SmugMug date prefixes from an album name before prompting.
 
@@ -766,65 +798,46 @@ class LlamaVisionModel(VisionModel):
             formatted_names = [name.replace("_", " ") for name in person_names]
             recognized_count = len(formatted_names)
 
-            # Build person context - use relationship description if available
+            # Build person context - use relationship description if available.
+            # The 1 / 2 / 3+ x with/without-total_faces matrix differs only in the
+            # subject clause and whether names are joined with an Oxford comma, so it
+            # is expressed as substitutions rather than six near-identical blocks.
+            plural = "" if recognized_count == 1 else "s"
+            # The single-person wordings repeat the name as a parenthetical hint.
+            name_hint = f" ({formatted_names[0]})" if recognized_count == 1 else ""
+
             if relationship_context:
-                # We have relationship context, include both names and relationships
-                names_list = (
-                    ", ".join(formatted_names[:-1]) + f" and {formatted_names[-1]}"
-                    if len(formatted_names) > 1
-                    else formatted_names[0]
-                )
+                # Relationship wording has always joined without the Oxford comma.
+                names_str = self._join_names(formatted_names, oxford=False)
                 context_parts.append(
-                    f"The people in this image are {names_list} ({relationship_context}). "
+                    f"The people in this image are {names_str} ({relationship_context}). "
                     f"Please use their names and incorporate the relationship information "
                     f"naturally into your description."
                 )
             elif total_faces and total_faces > recognized_count:
-                # There are other people in the photo we couldn't identify
-                if recognized_count == 1:
-                    context_parts.append(
-                        f"There are {total_faces} people in this image. "
-                        f"One of them is {formatted_names[0]}. "
-                        f"Please use their name ({formatted_names[0]}) when describing them, "
-                        f"and mention that there are other people present."
-                    )
-                elif recognized_count == 2:
-                    names_str = f"{formatted_names[0]} and {formatted_names[1]}"
-                    context_parts.append(
-                        f"There are {total_faces} people in this image. "
-                        f"Two of them are {names_str}. "
-                        f"Please use their names when describing them, "
-                        f"and mention that there are other people present."
-                    )
-                else:
-                    names_str = ", ".join(formatted_names[:-1]) + f", and {formatted_names[-1]}"
-                    context_parts.append(
-                        f"There are {total_faces} people in this image. "
-                        f"Some of them are {names_str}. "
-                        f"Please use their names when describing them, "
-                        f"and mention that there are other people present."
-                    )
+                # Some people in the photo could not be identified.
+                names_str = self._join_names(formatted_names)
+                qualifier = {1: "One of them is", 2: "Two of them are"}.get(
+                    recognized_count, "Some of them are"
+                )
+                context_parts.append(
+                    f"There are {total_faces} people in this image. "
+                    f"{qualifier} {names_str}. "
+                    f"Please use their name{plural}{name_hint} when describing them, "
+                    f"and mention that there are other people present."
+                )
             else:
-                # All faces were recognized (or total_faces not provided)
-                if recognized_count == 1:
-                    context_parts.append(
-                        f"The person in this image is {formatted_names[0]}. "
-                        f"Please use their name ({formatted_names[0]}) when describing them."
-                    )
-                elif recognized_count == 2:
-                    # Special formatting for two people: "Name1 and Name2"
-                    names_str = f"{formatted_names[0]} and {formatted_names[1]}"
-                    context_parts.append(
-                        f"The people in this image are {names_str}. "
-                        f"Please use their names when describing them."
-                    )
-                else:
-                    # Three or more: "Name1, Name2, and Name3"
-                    names_str = ", ".join(formatted_names[:-1]) + f", and {formatted_names[-1]}"
-                    context_parts.append(
-                        f"The people in this image are {names_str}. "
-                        f"Please use their names when describing them."
-                    )
+                # All faces were recognized (or total_faces not provided).
+                names_str = self._join_names(formatted_names)
+                subject = (
+                    "The person in this image is"
+                    if recognized_count == 1
+                    else "The people in this image are"
+                )
+                context_parts.append(
+                    f"{subject} {names_str}. "
+                    f"Please use their name{plural}{name_hint} when describing them."
+                )
         elif total_faces and total_faces > 0:
             # Faces were detected but nobody was recognized - still useful context.
             people_word = "person" if total_faces == 1 else "people"
@@ -1003,14 +1016,14 @@ class LlamaVisionModel(VisionModel):
 
         if want_caption:
             match = re.search(
-                r'"(?:caption|description|text)"\s*:\s*"((?:[^"\\]|\\.)*)"',
+                rf'"(?:{_CAPTION_KEY_ALT})"\s*:\s*"((?:[^"\\]|\\.)*)"',
                 content,
                 flags=re.IGNORECASE,
             )
             if not match:
                 # Truncated mid-caption: no closing quote to match against.
                 match = re.search(
-                    r'"(?:caption|description|text)"\s*:\s*"((?:[^"\\]|\\.)*)$',
+                    rf'"(?:{_CAPTION_KEY_ALT})"\s*:\s*"((?:[^"\\]|\\.)*)$',
                     content,
                     flags=re.IGNORECASE,
                 )
@@ -1019,7 +1032,7 @@ class LlamaVisionModel(VisionModel):
 
         if want_tags:
             match = re.search(
-                r'"(?:tags|keywords|labels)"\s*:\s*\[(.*?)(?:\]|$)',
+                rf'"(?:{_TAG_KEY_ALT})"\s*:\s*\[(.*?)(?:\]|$)',
                 content,
                 flags=re.IGNORECASE | re.DOTALL,
             )
@@ -1143,13 +1156,13 @@ class LlamaVisionModel(VisionModel):
         if isinstance(data, dict):
             lowered = {str(k).lower(): v for k, v in data.items()}
             if want_caption:
-                for key in ("caption", "description", "text", "summary"):
+                for key in CAPTION_KEYS:
                     if key in lowered:
                         caption = self._coerce_caption(lowered[key])
                         if caption:
                             break
             if want_tags:
-                for key in ("tags", "keywords", "keyword_tags", "labels"):
+                for key in TAG_KEYS:
                     if key in lowered:
                         tags = self._coerce_tag_list(lowered[key])
                         if tags:

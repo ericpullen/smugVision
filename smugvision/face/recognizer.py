@@ -65,7 +65,7 @@ _BACKEND_OPTION_KEYS: Dict[str, set] = {
 }
 
 # dlib-only settings, ignored when another backend is active.
-_DLIB_ONLY_SETTINGS = ("tolerance", "model", "detection_scale")
+_DLIB_ONLY_SETTINGS = tuple(_BACKEND_OPTION_KEYS["dlib"])
 
 __all__ = [
     "CACHE_VERSION",
@@ -531,20 +531,6 @@ class FaceRecognizer:
             f"Loaded {total_faces} reference face(s) for "
             f"{len(self.reference_faces)} person(s) in {elapsed:.2f}s{cache_status}"
         )
-
-    def _encode_face(self, image_path: str) -> Optional[np.ndarray]:
-        """Encode a face from an image file using the active backend.
-
-        Args:
-            image_path: Path to image file containing a face
-
-        Returns:
-            Face embedding vector, or None if no face found
-
-        Raises:
-            ImportError: If the backend's model files are not installed
-        """
-        return self.backend.encode_reference(Path(image_path))
 
     def _invalidate_memo(self) -> None:
         """Drop the single-entry detection memo."""

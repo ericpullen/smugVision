@@ -167,9 +167,10 @@ the keywords into the comma-separated string the API expects. `None` leaves a fi
 Both callers now use that keyword form — `ImageProcessor.process_image()` and
 `PreviewService.commit_changes()`. (`ImageProcessor` previously passed
 `MetadataFormatter.create_update_payload()`'s dict as the second *positional* argument, so the
-whole payload landed in `caption`; that is fixed.) Do not "simplify" either call site back to
-`update_image_metadata(image_key, payload)` or to `**payload` — `create_update_payload()` returns
-SmugMug-cased `{'Caption': str, 'Keywords': list}`, which does not match the parameter names.
+whole payload landed in `caption`; that is fixed, and the payload builder — which returned
+SmugMug-cased `{'Caption': str, 'Keywords': list}` that never matched the parameter names — has
+been deleted rather than left as a trap.) Do not "simplify" either call site to
+`update_image_metadata(image_key, some_dict)` or to `**some_dict`.
 
 ### Config keys that are still not wired
 

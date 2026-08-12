@@ -8,7 +8,12 @@ from smugvision.config import ConfigManager
 
 
 def _installed_models(endpoint: str, timeout: float = 2.0) -> Optional[List[str]]:
-    """Query Ollama for the models it currently serves.
+    """Query Ollama for the vision models it currently serves.
+
+    Delegates to :meth:`VisionModelFactory.list_models`, which is the one place that
+    knows how to read Ollama's tag list across client versions. Hand-rolling the HTTP
+    call here got the response shape wrong (newer servers key entries by ``model``,
+    not ``name``).
 
     This is best effort only. Setup must succeed on a machine where Ollama is not
     installed, not running, or listening somewhere else.
@@ -21,12 +26,17 @@ def _installed_models(endpoint: str, timeout: float = 2.0) -> Optional[List[str]
         A list of model names, or ``None`` if the server could not be reached.
     """
     try:
-        import requests
+        import ollama
 
-        response = requests.get(f"{endpoint.rstrip('/')}/api/tags", timeout=timeout)
-        response.raise_for_status()
-        models = response.json().get("models", [])
-        return [m["name"] for m in models if isinstance(m, dict) and m.get("name")]
+        from smugvision.vision import VisionModelFactory
+
+        # Probe reachability first. list_models() deliberately never raises and falls
+        # back to a static hint list, which would otherwise be presented here as
+        # "installed" on a machine where Ollama is not running at all.
+        ollama.Client(host=endpoint, timeout=timeout).list()
+
+        models = VisionModelFactory.list_models(endpoint=endpoint, timeout=timeout)
+        return models or None
     except Exception:
         return None
 

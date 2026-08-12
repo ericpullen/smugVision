@@ -97,7 +97,6 @@ MetadataFormatter(
 
 - `format_caption(ai_caption, existing_caption, location, person_names)` - Combine caption sources
 - `format_tags(ai_tags, existing_tags, person_names, location_tags)` - Merge tags
-- `create_update_payload(caption, tags, title)` - Create SmugMug API payload
 
 ## Processing Pipeline
 

@@ -196,10 +196,22 @@ class ImageProcessor:
                     )
                     cache_dir_path = PathLib(cache_dir).expanduser()
 
-                    # Backend selection ("dlib" or "insightface"); the per-backend
-                    # sub-block (e.g. face_recognition.insightface) supplies its options.
+                    # Backend selection ("dlib" or "insightface"). Tuning settings may live
+                    # at either depth: historically they sat at the top level of
+                    # face_recognition (tolerance/model/detection_scale), and a per-backend
+                    # sub-block (e.g. face_recognition.insightface) was added later. Read
+                    # both here so there is one answer to "where does a backend setting
+                    # live" -- the sub-block wins on conflict.
                     backend = config.get("face_recognition.backend", "dlib") or "dlib"
-                    backend_options = config.get(f"face_recognition.{backend}", {}) or {}
+                    backend_options = dict(config.get(f"face_recognition.{backend}", {}) or {})
+                    legacy_keys = {
+                        "tolerance": config.get("face_recognition.tolerance"),
+                        "model": config.get("face_recognition.model"),
+                        "detection_scale": config.get("face_recognition.detection_scale"),
+                    }
+                    for key, value in legacy_keys.items():
+                        if value is not None and key not in backend_options:
+                            backend_options[key] = value
 
                     # Only initialize if directory exists
                     if reference_faces_path.exists():
@@ -233,23 +245,6 @@ class ImageProcessor:
             f"max_tokens={self.vision_max_tokens}, single_call={self.vision_single_call}, "
             f"dry_run={dry_run}"
         )
-
-    def _use_single_call(self) -> bool:
-        """Decide whether to generate caption and tags in one inference call.
-
-        Returns:
-            True when vision.single_call is enabled and the vision model implements
-            generate_metadata (an injected legacy model may not)
-        """
-        if not self.vision_single_call:
-            return False
-        if not hasattr(self.vision, "generate_metadata"):
-            logger.debug(
-                f"{type(self.vision).__name__} has no generate_metadata(); "
-                f"using the two-call path"
-            )
-            return False
-        return True
 
     def process_album(
         self, album_key: str, force_reprocess: bool = False, skip_videos: bool = True
@@ -479,48 +474,23 @@ class ImageProcessor:
             caption_instruction = self.config.get("prompts.caption", DEFAULT_CAPTION_PROMPT)
             tags_instruction = self.config.get("prompts.tags", DEFAULT_TAGS_PROMPT)
 
-            if self._use_single_call():
-                # One prompt, one image encode, one inference call. Context (album,
-                # location, people, relationships.yaml) is injected by the vision layer
-                # so it is not also baked into the prompt text here.
-                logger.debug("Generating caption and tags in a single call")
-                metadata = self.vision.generate_metadata(
-                    str(image_path),
-                    caption_instruction,
-                    tags_instruction,
-                    temperature=self.vision_temperature,
-                    max_tokens=self.vision_max_tokens,
-                    location_context=location_string,
-                    person_names=raw_names,
-                    total_faces=total_faces if self.face_recognizer else None,
-                    album_name=album.name,
-                )
-                ai_caption = metadata.caption
-                ai_tags = list(metadata.tags)
-            else:
-                # Legacy two-call path (vision.single_call = false). Context is embedded
-                # in the prompt text here, as it always was.
-                logger.debug("Generating caption")
-                caption_prompt = self._build_caption_prompt(
-                    location=location_string, person_names=person_names, album_name=album.name
-                )
-                ai_caption = self.vision.generate_caption(
-                    image_path=str(image_path),
-                    prompt=caption_prompt,
-                    temperature=self.vision_temperature,
-                    max_tokens=self.vision_max_tokens,
-                )
-
-                logger.debug("Generating tags")
-                tags_prompt = self._build_tags_prompt(
-                    location=location_string, person_names=person_names, album_name=album.name
-                )
-                ai_tags = self.vision.generate_tags(
-                    image_path=str(image_path),
-                    prompt=tags_prompt,
-                    temperature=self.vision_temperature,
-                    max_tokens=self.vision_max_tokens,
-                )
+            # One call, whatever the request shape. `vision.single_call` decides whether the
+            # vision layer issues one request or two; that is a request-shaping detail it
+            # owns, so context (album, location, people, relationships.yaml) is passed as
+            # arguments and injected there rather than baked into the prompt text here.
+            metadata = self.vision.generate_metadata(
+                str(image_path),
+                caption_instruction,
+                tags_instruction,
+                temperature=self.vision_temperature,
+                max_tokens=self.vision_max_tokens,
+                location_context=location_string,
+                person_names=raw_names,
+                total_faces=total_faces if self.face_recognizer else None,
+                album_name=album.name,
+            )
+            ai_caption = metadata.caption
+            ai_tags = list(metadata.tags)
 
             # Format metadata
             final_caption = self.formatter.format_caption(
@@ -685,93 +655,6 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"Failed to download {image.file_name}: {e}")
             return None
-
-    def _build_caption_prompt(
-        self,
-        location: Optional[str] = None,
-        person_names: Optional[List[str]] = None,
-        album_name: Optional[str] = None,
-    ) -> str:
-        """Build caption prompt with context - legacy two-call path only.
-
-        Used when vision.single_call is false. The single-call path passes the raw
-        prompts.caption text plus the context as arguments and lets the vision layer
-        inject it, so context is never added twice.
-
-        Args:
-            location: Location string from EXIF
-            person_names: Identified person names (display form, underscores removed)
-            album_name: Name of the album this image belongs to
-
-        Returns:
-            Enhanced prompt string
-        """
-        base_prompt = self.config.get("prompts.caption", DEFAULT_CAPTION_PROMPT)
-
-        context_parts = []
-
-        if album_name:
-            context_parts.append(
-                f"Album name: {album_name}\n"
-                f"(The album name often describes the event, occasion, or subject - "
-                f"e.g., pet names, birthdays, trips, celebrations. Use this context "
-                f"to inform your caption.)"
-            )
-
-        if location:
-            context_parts.append(f"Location: {location}")
-
-        if person_names:
-            names_str = ", ".join(person_names)
-            context_parts.append(f"People identified: {names_str}")
-
-        if context_parts:
-            context = "\n".join(context_parts)
-            return f"{base_prompt}\n\nContext:\n{context}"
-
-        return base_prompt
-
-    def _build_tags_prompt(
-        self,
-        location: Optional[str] = None,
-        person_names: Optional[List[str]] = None,
-        album_name: Optional[str] = None,
-    ) -> str:
-        """Build tags prompt with context - legacy two-call path only.
-
-        Used when vision.single_call is false. The single-call path passes the raw
-        prompts.tags text plus the context as arguments and lets the vision layer
-        inject it, so context is never added twice.
-
-        Args:
-            location: Location string from EXIF
-            person_names: Identified person names (display form, underscores removed)
-            album_name: Name of the album this image belongs to
-
-        Returns:
-            Enhanced prompt string
-        """
-        base_prompt = self.config.get("prompts.tags", DEFAULT_TAGS_PROMPT)
-
-        context_parts = []
-
-        if album_name:
-            context_parts.append(
-                f"Album: {album_name} (may contain event/occasion info like pet names, "
-                f"birthdays, trips)"
-            )
-
-        if location:
-            context_parts.append(f"Location: {location}")
-
-        if person_names:
-            context_parts.append(f"People: {', '.join(person_names)}")
-
-        if context_parts:
-            context = " | ".join(context_parts)
-            return f"{base_prompt}\n\nContext: {context}"
-
-        return base_prompt
 
     def _extract_location_tags(self, exif_location) -> Optional[List[str]]:
         """Extract location-based tags from EXIF location data.
