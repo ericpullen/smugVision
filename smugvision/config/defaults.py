@@ -26,7 +26,11 @@ DEFAULT_CONFIG = {
         # itself, which honours $OLLAMA_HOST and falls back to http://localhost:11434.
         # Setting a URL here overrides $OLLAMA_HOST.
         "endpoint": None,
-        "temperature": 0.7,
+        # Captioning is a description task, not a creative one. 0.7 produced a visibly
+        # wrong caption roughly 1 run in 12 on a photo with an ambiguous subject, and made
+        # preview-then-commit unpredictable because each dry run generated a different
+        # sentence. 0.3 was stable across repeated runs on the same image.
+        "temperature": 0.3,
         # Budget for ONE response that carries the caption AND the tags together.
         "max_tokens": 500,
         "timeout": 120,
@@ -93,9 +97,17 @@ DEFAULT_CONFIG = {
     },
     # Prompt Configuration
     "prompts": {
+        # The "who is doing what" clause is load-bearing. Without it, models reach for the
+        # socially plausible reading over the visible one: a photo of a man holding a dog
+        # chew with the dog biting the other end was captioned "sharing a snack with his
+        # black dog" in 6 of 6 runs, and once as the man "enjoying a snack". With the
+        # clause it became "holds a long snack for his black dog to eat", 6 of 6.
         "caption": (
             "You are a photo captioning assistant. Write exactly ONE caption (1-2 sentences) "
             "for this image. Describe the main subject, setting, and activity. "
+            "Describe only what is visibly happening. Be precise about who is doing what: "
+            "if a person is holding or offering an object to an animal or another person, "
+            "say so rather than implying they share it or use it themselves. "
             "IMPORTANT: Output ONLY the caption text. No options, no explanations, no "
             "introductions like 'Here is...' - just the caption itself."
         ),
