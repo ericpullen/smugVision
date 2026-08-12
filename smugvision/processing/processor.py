@@ -46,6 +46,8 @@ class ProcessingResult:
         current_keywords: Original keywords before processing
         proposed_caption: Generated caption (what was/would be written)
         proposed_keywords: Generated keywords (what was/would be written)
+        proposed_title: Generated short title, or None when processing.generate_titles
+            is off or the model returned nothing usable
         detected_faces: List of person names detected
         location: Resolved location string
         location_aliases: Location aliases for tags
@@ -66,6 +68,7 @@ class ProcessingResult:
     current_keywords: Optional[List[str]] = None
     proposed_caption: Optional[str] = None
     proposed_keywords: Optional[List[str]] = None
+    proposed_title: Optional[str] = None
     detected_faces: Optional[List[str]] = None
     location: Optional[str] = None
     location_aliases: Optional[List[str]] = None
@@ -277,6 +280,10 @@ class ImageProcessor:
                 f"processing.preserve_existing overridden for this run: "
                 f"{self.preserve_existing}"
             )
+        # Titles are opt-in: smugVision has never written Title, so turning it on
+        # silently would start changing a field users may curate by hand.
+        self.generate_titles = bool(config.get("processing.generate_titles", False))
+
         self.formatter = MetadataFormatter(
             preserve_existing=self.preserve_existing,
             marker_tag=config.get("processing.marker_tag", "smugvision"),
@@ -586,9 +593,16 @@ class ImageProcessor:
                 total_faces=total_faces if self.face_recognizer else None,
                 album_name=album.name,
                 hints=hints_text or None,
+                title_instruction=(
+                    self.config.get("prompts.title") if self.generate_titles else None
+                ),
             )
             ai_caption = metadata.caption
             ai_tags = list(metadata.tags)
+            # Never blank an existing title: a model that ignored the field, or produced
+            # something over-long that the vision layer discarded, must leave Title alone.
+            final_title = metadata.title.strip() if self.generate_titles else ""
+            result.proposed_title = final_title or None
 
             # Format metadata
             final_caption = self.formatter.format_caption(
@@ -643,9 +657,12 @@ class ImageProcessor:
                     image_key=image.image_key,
                     caption=final_caption or None,
                     keywords=final_tags or None,
+                    title=final_title or None,
                 )
             else:
                 logger.info("  [DRY RUN] Would update with:")
+                if final_title:
+                    logger.info(f"    Title: {final_title}")
                 logger.info(f"    Caption: {final_caption}")
                 logger.info(f"    Tags ({len(final_tags)}): {', '.join(final_tags)}")
 

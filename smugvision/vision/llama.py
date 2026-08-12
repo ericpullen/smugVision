@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 # JSON, and "labels" was the reverse).
 CAPTION_KEYS: Tuple[str, ...] = ("caption", "description", "text", "summary")
 TAG_KEYS: Tuple[str, ...] = ("tags", "keywords", "keyword_tags", "labels")
+TITLE_KEYS: Tuple[str, ...] = ("title", "headline", "name")
 
 # Regex alternations built from the tables above, so the salvage patterns can never
 # drift from the strict parser's vocabulary.
@@ -661,6 +662,7 @@ class LlamaVisionModel(VisionModel):
         caption_instruction: str,
         tags_instruction: str,
         structured: bool,
+        title_instruction: str = "",
     ) -> str:
         """Build the instruction half of a single-call prompt.
 
@@ -668,6 +670,10 @@ class LlamaVisionModel(VisionModel):
             caption_instruction: Caption instruction (empty to skip captions)
             tags_instruction: Tags instruction (empty to skip tags)
             structured: Whether a JSON schema will constrain the response
+            title_instruction: Optional short-title instruction. Appended as an extra
+                field rather than folded into the caption/tags branching, because a
+                title is opportunistic - it never changes whether the response is
+                usable, so it must not multiply the request-shape cases.
 
         Returns:
             The combined instruction text, without context (added separately)
@@ -700,6 +706,15 @@ class LlamaVisionModel(VisionModel):
             parts.append(tags_instruction.strip())
             if structured:
                 parts.append('Respond with a single JSON object: {"tags": ["tag1", "tag2"]}.')
+
+        if title_instruction and title_instruction.strip() and parts:
+            parts.append(f"TITLE INSTRUCTIONS: {title_instruction.strip()}")
+            if structured:
+                parts.append(
+                    'Include a "title" field in the same JSON object: ' '{"title": "<the title>"}.'
+                )
+            else:
+                parts.append("Add a final line: TITLE: <the title>")
 
         return "\n\n".join(parts)
 
@@ -939,12 +954,17 @@ class LlamaVisionModel(VisionModel):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_schema(want_caption: bool, want_tags: bool) -> Dict[str, Any]:
+    def _build_schema(
+        want_caption: bool, want_tags: bool, want_title: bool = False
+    ) -> Dict[str, Any]:
         """Build the JSON Schema passed to Ollama as ``format``.
 
         Args:
             want_caption: Whether a caption field is requested
             want_tags: Whether a tags field is requested
+            want_title: Whether a title field is offered. Deliberately NOT added to
+                ``required``: a model that omits it should still produce a usable
+                caption and tags rather than failing the whole response.
 
         Returns:
             A JSON Schema dict describing the expected object
@@ -957,7 +977,50 @@ class LlamaVisionModel(VisionModel):
         if want_tags:
             properties["tags"] = {"type": "array", "items": {"type": "string"}}
             required.append("tags")
+        if want_title:
+            properties["title"] = {"type": "string"}
         return {"type": "object", "properties": properties, "required": required}
+
+    def _extract_title(self, content: str) -> str:
+        """Pull a short title out of a response, if one is there.
+
+        Opportunistic: a missing or unparseable title returns ``""`` and is not an
+        error, because the caption and tags of the same response are still perfectly
+        usable and a title is optional SmugMug metadata.
+
+        Handles the structured JSON case first, then the free-text ``TITLE: ...`` line
+        that the non-structured prompt asks for.
+
+        Args:
+            content: Raw response text
+
+        Returns:
+            The title, stripped of quotes and a trailing period, or ``""``
+        """
+        title = ""
+        try:
+            payload = json.loads(self._extract_json_text(content))
+            if isinstance(payload, dict):
+                for key in TITLE_KEYS:
+                    for actual in payload:
+                        if str(actual).lower() == key and isinstance(payload[actual], str):
+                            title = payload[actual]
+                            break
+                    if title:
+                        break
+        except Exception:
+            match = re.search(r"^\s*TITLE\s*[:\-]\s*(.+)$", content, re.IGNORECASE | re.MULTILINE)
+            if match:
+                title = match.group(1)
+
+        title = title.strip().strip("\"'").strip()
+        # A model that ignores "short" and writes a sentence is giving us a caption, not
+        # a title; SmugMug titles show in album grids, so an over-long one is worse than
+        # none. 120 chars is generous for 3-8 words and cheap to check.
+        if len(title) > 120:
+            logger.debug(f"Discarding over-long title ({len(title)} chars)")
+            return ""
+        return title.rstrip(".")
 
     @staticmethod
     def _strip_code_fence(content: str) -> str:
@@ -1298,6 +1361,7 @@ class LlamaVisionModel(VisionModel):
         total_faces: Optional[int] = None,
         album_name: Optional[str] = None,
         hints: Optional[str] = None,
+        title_instruction: Optional[str] = None,
     ) -> MetadataResult:
         """Generate a caption and keyword tags for an image.
 
@@ -1349,8 +1413,9 @@ class LlamaVisionModel(VisionModel):
             # ONE encode, reused by every request below.
             image_base64 = self._encode_image(image_path)
 
+            title = ""
             if self.single_call or not (want_caption and want_tags):
-                caption, tags = self._generate_combined(
+                caption, tags, title = self._generate_combined(
                     image_base64=image_base64,
                     caption_instruction=caption_instruction,
                     tags_instruction=tags_instruction,
@@ -1363,8 +1428,13 @@ class LlamaVisionModel(VisionModel):
                     total_faces=total_faces,
                     album_name=album_name,
                     hints=hints,
+                    title_instruction=title_instruction or "",
                 )
             else:
+                # The legacy two-call path does not offer titles: it exists as a fallback
+                # for models that handle one structured request badly, and adding a third
+                # request to it would make the fallback slower than the thing it falls
+                # back from.
                 caption, tags = self._generate_two_calls(
                     image_base64=image_base64,
                     caption_instruction=caption_instruction,
@@ -1394,6 +1464,7 @@ class LlamaVisionModel(VisionModel):
             confidence=1.0,
             model_used=self.model_name,
             processing_time=processing_time,
+            title=title,
         )
 
     def _generate_combined(
@@ -1411,7 +1482,8 @@ class LlamaVisionModel(VisionModel):
         total_faces: Optional[int],
         album_name: Optional[str],
         hints: Optional[str] = None,
-    ) -> Tuple[str, List[str]]:
+        title_instruction: str = "",
+    ) -> Tuple[str, List[str], str]:
         """Run one chat request covering everything that was requested.
 
         Args:
@@ -1432,19 +1504,33 @@ class LlamaVisionModel(VisionModel):
             Tuple of (caption, tags)
         """
         prompt = self._build_combined_prompt(
-            caption_instruction, tags_instruction, structured=self.structured_output
+            caption_instruction,
+            tags_instruction,
+            structured=self.structured_output,
+            title_instruction=title_instruction,
         )
         prompt = self._enhance_prompt_with_context(
             prompt, location_context, person_names, total_faces, album_name, hints
         )
         self._log_prompt("metadata", prompt)
 
-        schema = self._build_schema(want_caption, want_tags) if self.structured_output else None
+        want_title = bool(title_instruction and title_instruction.strip())
+        schema = (
+            self._build_schema(want_caption, want_tags, want_title)
+            if self.structured_output
+            else None
+        )
         content = self._call_ollama(
             prompt, image_base64, temperature, max_tokens, response_format=schema
         )
 
-        return self._interpret_response(content, want_caption, want_tags, structured=schema)
+        caption, tags = self._interpret_response(
+            content, want_caption, want_tags, structured=schema
+        )
+        # Title is read opportunistically off the same payload. It is never required, so
+        # a model that ignores the field costs a title and nothing else.
+        title = self._extract_title(content) if want_title else ""
+        return caption, tags, title
 
     def _interpret_response(
         self,

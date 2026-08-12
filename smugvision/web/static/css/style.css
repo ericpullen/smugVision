@@ -1990,3 +1990,9 @@ dialog#confirm-write-modal {
     outline: 2px solid var(--focus, #6cf);
     outline-offset: 2px;
 }
+
+/* A proposed Title reads as a label, not prose, so it gets its own weight. */
+.diff-line.title-line {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}

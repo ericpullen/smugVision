@@ -141,10 +141,13 @@ def start_preview():
         {
             "url": "https://site.smugmug.com/.../n-XXXXX/album-name",
             "album_key": "Ab3kZq",
-            "force_reprocess": false
+            "force_reprocess": false,
+            "replace_existing": false
         }
 
-    Exactly one of "url" or "album_key" is required.
+    Exactly one of "url" or "album_key" is required. "replace_existing" overrides
+    processing.preserve_existing for this job only: true REPLACES the caption and
+    keywords already on each image instead of merging into them.
 
     Returns:
         Job information including job_id for tracking
@@ -160,6 +163,10 @@ def start_preview():
         return jsonify({"error": "Provide either 'url' or 'album_key', not both"}), 400
 
     force_reprocess = bool(data.get("force_reprocess", False))
+    # Phrased as replace_existing in the API because that is what the user is choosing;
+    # it maps to the negation of processing.preserve_existing. Absent means "use config".
+    replace_existing = data.get("replace_existing")
+    preserve_existing = None if replace_existing is None else (not replace_existing)
 
     try:
         service = get_preview_service()
@@ -167,10 +174,12 @@ def start_preview():
             url=url or None,
             force_reprocess=force_reprocess,
             album_key=album_key or None,
+            preserve_existing=preserve_existing,
         )
 
         return jsonify({
             "job_id": job.job_id,
+            "replace_existing": job.preserve_existing is False,
             "album_key": job.album_key,
             "album_name": job.album_name,
             "total_images": job.total_images,
@@ -278,6 +287,7 @@ def preview_results():
             "errors": job.error_count,
         },
         "images": [result.to_dict() for result in job.results],
+        "replace_existing": job.preserve_existing is False,
         "hints": _job_hints(service, job),
         "error": job.error,
     })

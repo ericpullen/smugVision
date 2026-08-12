@@ -119,7 +119,8 @@
 
         document.title = 'smugVision - ' + albumName;
         dom.albumTitle.textContent = albumName;
-        dom.albumKeyEl.textContent = 'album ' + albumKey + '  ·  job ' + jobId;
+        dom.albumKeyEl.textContent = 'album ' + albumKey + '  ·  job ' + jobId
+            + (data.replace_existing ? '  ·  replacing existing metadata' : '');
 
         renderTally(data.stats);
         renderHintEditors();
@@ -348,9 +349,16 @@
             rows.push(el('p', {className: 'diff-line added', text: proposed}));
         }
 
-        return el('div', {className: 'slip'}, [
-            el('p', {className: 'slip-label', text: 'Proposed caption'})
-        ].concat(rows));
+        const blocks = [el('p', {className: 'slip-label', text: 'Proposed caption'})];
+        // Titles are opt-in (processing.generate_titles), so the row only appears when
+        // one was actually produced - an absent title means Title is left untouched.
+        const title = (image.proposed.title || '').trim();
+        if (title) {
+            blocks.push(el('p', {className: 'slip-label', text: 'Proposed title'}));
+            blocks.push(el('p', {className: 'diff-line added title-line', text: title}));
+            blocks.push(el('p', {className: 'slip-label', text: 'Caption'}));
+        }
+        return el('div', {className: 'slip'}, blocks.concat(rows));
     }
 
     function buildTags(image) {

@@ -19,6 +19,9 @@ class MetadataResult:
         confidence: Confidence score from 0.0 to 1.0
         model_used: Name of the model that generated the metadata
         processing_time: Time taken to process in seconds
+        title: Short title, ``""`` unless a title was requested and the model returned
+            one. Opportunistic by design: a missing title is never an error, because a
+            title is optional metadata and losing a whole run over it would be absurd.
     """
 
     caption: str
@@ -26,6 +29,7 @@ class MetadataResult:
     confidence: float
     model_used: str
     processing_time: float
+    title: str = ""
 
 
 class VisionModel(ABC):

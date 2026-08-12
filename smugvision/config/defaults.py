@@ -84,6 +84,11 @@ DEFAULT_CONFIG = {
         "generate_captions": True,
         "generate_tags": True,
         "preserve_existing": True,
+        # Off by default: smugVision has never written Title, and turning it on for
+        # existing users without asking would start changing a field they may curate by
+        # hand. When on, a title is only ever offered, never required - see
+        # MetadataResult.title.
+        "generate_titles": False,
         # SmugMug size name. Matched case-insensitively by SmugMugClient.download_image,
         # so an existing lowercase "medium" in a user's config keeps working.
         "image_size": "Medium",
@@ -120,6 +125,13 @@ DEFAULT_CONFIG = {
             "say so rather than implying they share it or use it themselves. "
             "IMPORTANT: Output ONLY the caption text. No options, no explanations, no "
             "introductions like 'Here is...' - just the caption itself."
+        ),
+        # Only used when processing.generate_titles is on. SmugMug titles show in album
+        # grids, so this asks for a label rather than a sentence - an over-long title is
+        # worse than none, and the vision layer discards anything above 120 chars.
+        "title": (
+            "Also give a very short title for this image: 3-6 words, like a label in a "
+            "photo album. Not a sentence. No trailing punctuation."
         ),
         "tags": (
             "Output a comma-separated list of 5-10 keyword tags for this image. "

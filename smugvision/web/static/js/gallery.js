@@ -37,6 +37,7 @@
         dom.selectionNotice = document.getElementById('selection-notice');
         dom.runBtn = document.getElementById('run-btn');
         dom.forceReprocess = document.getElementById('force-reprocess');
+        dom.replaceExisting = document.getElementById('replace-existing');
         dom.clearSelectionBtn = document.getElementById('clear-selection-btn');
 
         dom.progress = document.getElementById('run-progress');
@@ -354,7 +355,10 @@
         S.announce(dom.progressLine, 'Asking SmugMug for ' + label + '.');
 
         const force = dom.forceReprocess.checked;
-        const payload = Object.assign({force_reprocess: force}, body);
+        const payload = Object.assign({
+            force_reprocess: force,
+            replace_existing: dom.replaceExisting.checked
+        }, body);
 
         let job;
         try {

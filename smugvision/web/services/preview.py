@@ -64,6 +64,7 @@ class ImagePreviewResult:
     current_keywords: List[str] = field(default_factory=list)
     proposed_caption: Optional[str] = None
     proposed_keywords: List[str] = field(default_factory=list)
+    proposed_title: Optional[str] = None
     faces_detected: List[str] = field(default_factory=list)
     location: Optional[str] = None
     error: Optional[str] = None
@@ -84,6 +85,7 @@ class ImagePreviewResult:
             "proposed": {
                 "caption": self.proposed_caption,
                 "keywords": self.proposed_keywords,
+                "title": self.proposed_title,
             },
             "details": {
                 "faces_detected": self.faces_detected,
@@ -112,6 +114,9 @@ class PreviewJob:
     processed_count: int = 0
     skipped_count: int = 0
     error_count: int = 0
+    # None = use processing.preserve_existing from config; False = replace the existing
+    # caption and keywords instead of merging into them, for this job only.
+    preserve_existing: Optional[bool] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -196,6 +201,50 @@ class PreviewService:
             logger.info("ImageProcessor initialized")
         
         return self._processor
+
+    def processor_for(self, preserve_existing: Optional[bool]) -> ImageProcessor:
+        """Return the processor matching one job's merge/replace mode.
+
+        preserve_existing is a constructor argument, so replace mode needs its own
+        ImageProcessor rather than mutating the shared one - mutating it would change the
+        mode under any job running concurrently. The second instance INJECTS the first's
+        collaborators, which is what they are injectable for: building it fresh would
+        re-encode every reference face (~5s and a second copy in memory) and open a
+        second Ollama client for no reason.
+
+        Args:
+            preserve_existing: ``None`` for the configured behaviour, ``False`` to
+                replace existing caption and keywords. ``True`` is the configured
+                default in practice and maps to the shared processor.
+
+        Returns:
+            An ImageProcessor in dry_run mode with the requested merge behaviour
+        """
+        base = self.processor
+        if preserve_existing is None or preserve_existing == base.preserve_existing:
+            return base
+
+        with self._init_lock:
+            cached = getattr(self, "_replace_processor", None)
+            if cached is not None and cached.preserve_existing == preserve_existing:
+                return cached
+
+            logger.info(
+                f"Building a second ImageProcessor with preserve_existing="
+                f"{preserve_existing} (sharing vision model, faces, cache and hints)"
+            )
+            processor = ImageProcessor(
+                config=self.config,
+                smugmug_client=base.smugmug,
+                vision_model=base.vision,
+                cache_manager=base.cache,
+                face_recognizer=base.face_recognizer,
+                hint_manager=base.hints,
+                dry_run=True,
+                preserve_existing=preserve_existing,
+            )
+            self._replace_processor = processor
+            return processor
     
     @property
     def smugmug(self) -> SmugMugClient:
@@ -361,7 +410,8 @@ class PreviewService:
         self,
         url: Optional[str] = None,
         force_reprocess: bool = False,
-        album_key: Optional[str] = None
+        album_key: Optional[str] = None,
+        preserve_existing: Optional[bool] = None
     ) -> PreviewJob:
         """Create a new preview job for an album.
 
@@ -413,6 +463,7 @@ class PreviewService:
             album_name=album_name,
             status="processing",
             total_images=len(images),
+            preserve_existing=preserve_existing,
         )
         
         # Store job
@@ -500,7 +551,7 @@ class PreviewService:
                 
                 # Process using the main ImageProcessor (dry_run=True)
                 # This ensures 100% identical behavior to CLI
-                proc_result = self.processor.process_image(
+                proc_result = self.processor_for(job.preserve_existing).process_image(
                     image=image,
                     album=album,
                     force_reprocess=force_reprocess
@@ -589,6 +640,7 @@ class PreviewService:
             # Proposed metadata from ImageProcessor
             proposed_caption=proc_result.proposed_caption if proc_result.success else proc_result.current_caption,
             proposed_keywords=proc_result.proposed_keywords if proc_result.success else (proc_result.current_keywords or []),
+            proposed_title=proc_result.proposed_title if proc_result.success else None,
             # Details from ImageProcessor
             faces_detected=proc_result.detected_faces or [],
             location=proc_result.location,
@@ -668,7 +720,7 @@ class PreviewService:
 
         logger.info(f"Regenerating {image.file_name} ({image_key}) for job {job_id}")
 
-        proc_result = self.processor.process_image(
+        proc_result = self.processor_for(job.preserve_existing).process_image(
             image=image,
             album=album,
             force_reprocess=force_reprocess
@@ -774,6 +826,7 @@ class PreviewService:
                     image_key=result.image_key,
                     caption=result.proposed_caption or None,
                     keywords=result.proposed_keywords or None,
+                    title=result.proposed_title or None,
                 )
                 committed += 1
                 committed_keys.append(result.image_key)
