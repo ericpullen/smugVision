@@ -117,6 +117,8 @@ class PreviewJob:
     # None = use processing.preserve_existing from config; False = replace the existing
     # caption and keywords instead of merging into them, for this job only.
     preserve_existing: Optional[bool] = None
+    # None = use processing.generate_titles from config.
+    generate_titles: Optional[bool] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -202,10 +204,14 @@ class PreviewService:
         
         return self._processor
 
-    def processor_for(self, preserve_existing: Optional[bool]) -> ImageProcessor:
+    def processor_for(
+        self,
+        preserve_existing: Optional[bool] = None,
+        generate_titles: Optional[bool] = None,
+    ) -> ImageProcessor:
         """Return the processor matching one job's merge/replace mode.
 
-        preserve_existing is a constructor argument, so replace mode needs its own
+        Both flags are constructor arguments, so each distinct combination needs its own
         ImageProcessor rather than mutating the shared one - mutating it would change the
         mode under any job running concurrently. The second instance INJECTS the first's
         collaborators, which is what they are injectable for: building it fresh would
@@ -214,24 +220,32 @@ class PreviewService:
 
         Args:
             preserve_existing: ``None`` for the configured behaviour, ``False`` to
-                replace existing caption and keywords. ``True`` is the configured
-                default in practice and maps to the shared processor.
+                replace existing caption and keywords
+            generate_titles: ``None`` for the configured behaviour, or an explicit
+                override for this job
 
         Returns:
             An ImageProcessor in dry_run mode with the requested merge behaviour
         """
         base = self.processor
-        if preserve_existing is None or preserve_existing == base.preserve_existing:
+        wanted = (
+            base.preserve_existing if preserve_existing is None else bool(preserve_existing),
+            base.generate_titles if generate_titles is None else bool(generate_titles),
+        )
+        if wanted == (base.preserve_existing, base.generate_titles):
             return base
 
         with self._init_lock:
-            cached = getattr(self, "_replace_processor", None)
-            if cached is not None and cached.preserve_existing == preserve_existing:
-                return cached
+            cache = getattr(self, "_variant_processors", None)
+            if cache is None:
+                cache = {}
+                self._variant_processors = cache
+            if wanted in cache:
+                return cache[wanted]
 
             logger.info(
-                f"Building a second ImageProcessor with preserve_existing="
-                f"{preserve_existing} (sharing vision model, faces, cache and hints)"
+                f"Building an ImageProcessor variant preserve_existing={wanted[0]}, "
+                f"generate_titles={wanted[1]} (sharing vision model, faces, cache, hints)"
             )
             processor = ImageProcessor(
                 config=self.config,
@@ -241,9 +255,10 @@ class PreviewService:
                 face_recognizer=base.face_recognizer,
                 hint_manager=base.hints,
                 dry_run=True,
-                preserve_existing=preserve_existing,
+                preserve_existing=wanted[0],
+                generate_titles=wanted[1],
             )
-            self._replace_processor = processor
+            cache[wanted] = processor
             return processor
     
     @property
@@ -411,7 +426,8 @@ class PreviewService:
         url: Optional[str] = None,
         force_reprocess: bool = False,
         album_key: Optional[str] = None,
-        preserve_existing: Optional[bool] = None
+        preserve_existing: Optional[bool] = None,
+        generate_titles: Optional[bool] = None
     ) -> PreviewJob:
         """Create a new preview job for an album.
 
@@ -464,6 +480,7 @@ class PreviewService:
             status="processing",
             total_images=len(images),
             preserve_existing=preserve_existing,
+            generate_titles=generate_titles,
         )
         
         # Store job
@@ -551,7 +568,8 @@ class PreviewService:
                 
                 # Process using the main ImageProcessor (dry_run=True)
                 # This ensures 100% identical behavior to CLI
-                proc_result = self.processor_for(job.preserve_existing).process_image(
+                processor = self.processor_for(job.preserve_existing, job.generate_titles)
+                proc_result = processor.process_image(
                     image=image,
                     album=album,
                     force_reprocess=force_reprocess
@@ -720,7 +738,7 @@ class PreviewService:
 
         logger.info(f"Regenerating {image.file_name} ({image_key}) for job {job_id}")
 
-        proc_result = self.processor_for(job.preserve_existing).process_image(
+        proc_result = self.processor_for(job.preserve_existing, job.generate_titles).process_image(
             image=image,
             album=album,
             force_reprocess=force_reprocess

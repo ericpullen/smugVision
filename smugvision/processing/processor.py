@@ -121,6 +121,7 @@ class ImageProcessor:
         hint_manager: Optional[HintManager] = None,
         dry_run: bool = False,
         preserve_existing: Optional[bool] = None,
+        generate_titles: Optional[bool] = None,
     ) -> None:
         """Initialize image processor.
 
@@ -137,6 +138,8 @@ class ImageProcessor:
                 ``None`` (the default) uses the configured value. ``False`` replaces the
                 existing caption and keywords instead of merging into them, which
                 discards anything already on the image.
+            generate_titles: Overrides ``processing.generate_titles`` for this run.
+                ``None`` (the default) uses the configured value.
         """
         self.config = config
         self.dry_run = dry_run
@@ -282,7 +285,13 @@ class ImageProcessor:
             )
         # Titles are opt-in: smugVision has never written Title, so turning it on
         # silently would start changing a field users may curate by hand.
-        self.generate_titles = bool(config.get("processing.generate_titles", False))
+        if generate_titles is None:
+            self.generate_titles = bool(config.get("processing.generate_titles", False))
+        else:
+            self.generate_titles = bool(generate_titles)
+            logger.info(
+                f"processing.generate_titles overridden for this run: " f"{self.generate_titles}"
+            )
 
         self.formatter = MetadataFormatter(
             preserve_existing=self.preserve_existing,

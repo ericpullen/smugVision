@@ -38,6 +38,7 @@
         dom.runBtn = document.getElementById('run-btn');
         dom.forceReprocess = document.getElementById('force-reprocess');
         dom.replaceExisting = document.getElementById('replace-existing');
+        dom.generateTitles = document.getElementById('generate-titles');
         dom.clearSelectionBtn = document.getElementById('clear-selection-btn');
 
         dom.progress = document.getElementById('run-progress');
@@ -357,7 +358,8 @@
         const force = dom.forceReprocess.checked;
         const payload = Object.assign({
             force_reprocess: force,
-            replace_existing: dom.replaceExisting.checked
+            replace_existing: dom.replaceExisting.checked,
+            generate_titles: dom.generateTitles.checked
         }, body);
 
         let job;
@@ -482,6 +484,15 @@
                 })
             ]);
             return;
+        }
+
+        // Reflect the configured defaults, so an untouched checkbox agrees with the
+        // config instead of silently overriding it on the next run.
+        if (dom.generateTitles && typeof status.generate_titles_default === 'boolean') {
+            dom.generateTitles.checked = status.generate_titles_default;
+        }
+        if (dom.replaceExisting && status.preserve_existing_default === false) {
+            dom.replaceExisting.checked = true;
         }
 
         const rows = [

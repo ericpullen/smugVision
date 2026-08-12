@@ -142,7 +142,8 @@ def start_preview():
             "url": "https://site.smugmug.com/.../n-XXXXX/album-name",
             "album_key": "Ab3kZq",
             "force_reprocess": false,
-            "replace_existing": false
+            "replace_existing": false,
+            "generate_titles": true
         }
 
     Exactly one of "url" or "album_key" is required. "replace_existing" overrides
@@ -167,6 +168,8 @@ def start_preview():
     # it maps to the negation of processing.preserve_existing. Absent means "use config".
     replace_existing = data.get("replace_existing")
     preserve_existing = None if replace_existing is None else (not replace_existing)
+    raw_titles = data.get("generate_titles")
+    generate_titles = None if raw_titles is None else bool(raw_titles)
 
     try:
         service = get_preview_service()
@@ -175,11 +178,13 @@ def start_preview():
             force_reprocess=force_reprocess,
             album_key=album_key or None,
             preserve_existing=preserve_existing,
+            generate_titles=generate_titles,
         )
 
         return jsonify({
             "job_id": job.job_id,
             "replace_existing": job.preserve_existing is False,
+            "generate_titles": job.generate_titles,
             "album_key": job.album_key,
             "album_name": job.album_name,
             "total_images": job.total_images,
@@ -826,6 +831,14 @@ def api_status():
         status = {
             "api": "ok",
             "config_loaded": True,
+            # Defaults the run-panel checkboxes reflect, so an unticked box cannot
+            # silently override a config value the user deliberately set.
+            "generate_titles_default": bool(
+                config.get("processing.generate_titles", False)
+            ),
+            "preserve_existing_default": bool(
+                config.get("processing.preserve_existing", True)
+            ),
             "smugmug": "unknown",
             "vision_model": "unknown",
             "face_recognition": "unknown",
