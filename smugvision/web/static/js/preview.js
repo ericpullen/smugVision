@@ -30,6 +30,8 @@
     let images = [];          // latest image result objects, in order
     let hints = null;         // {enabled, global, album, images:{key:text}}
     let committed = false;
+    let knownFaces = [];      // [{name, display_name, reference_count}] for the picker
+    let albumPicker = null;   // album-scope people picker, built after results load
     let pendingWriteKeys = null;  // image keys the open confirm dialog named
     let regenerating = 0;         // in-flight single-frame re-reads
 
@@ -49,6 +51,7 @@
         dom.albumHintBtn = document.getElementById('album-hint-btn');
         dom.albumHintStatus = document.getElementById('album-hint-status');
         dom.albumLocation = document.getElementById('album-location');
+        dom.albumPeople = document.getElementById('album-people');
         dom.globalHintSummary = document.getElementById('global-hint-summary');
 
         dom.writePanel = document.getElementById('write-panel');
@@ -97,6 +100,16 @@
             dom.loadError.textContent = error.message;
             dom.loadError.classList.remove('hidden');
             return;
+        }
+
+        // The people picker offers exactly the reference faces that exist, so a name
+        // typed by hand cannot drift from a reference_faces/ directory. A failure here
+        // only costs the picker, never the proof sheet.
+        try {
+            const faceData = await S.apiGet('/api/faces');
+            knownFaces = (faceData && faceData.faces) || [];
+        } catch (error) {
+            knownFaces = [];
         }
 
         albumKey = data.album_key;
@@ -149,6 +162,14 @@
         dom.albumHint.value = hints.album || '';
         dom.albumLocation.value = hints.album_location || '';
 
+        albumPicker = buildPeoplePicker(
+            'album-who',
+            hints.album_people || [],
+            'Who is in this album?',
+            'album-people-hint'
+        );
+        S.setChildren(dom.albumPeople, [albumPicker.node]);
+
         if (hints.global) {
             S.setChildren(dom.globalHintSummary, [
                 el('span', {className: 'scope-badge global', text: 'global'}),
@@ -173,12 +194,14 @@
                 scope: 'album',
                 key: albumKey,
                 text: dom.albumHint.value,
-                location: dom.albumLocation.value
+                location: dom.albumLocation.value,
+                people: albumPicker ? albumPicker.selected() : []
             });
             hints.album = result.text;
             dom.albumHint.value = result.text;
             hints.album_location = result.location || '';
             dom.albumLocation.value = hints.album_location;
+            hints.album_people = result.people || [];
             S.announce(
                 dom.albumHintStatus,
                 result.cleared
@@ -388,6 +411,60 @@
      * Margin note (per-image hint) + re-read one frame
      * -------------------------------------------------------------- */
 
+    /**
+     * A checkbox per known reference face. Checkboxes rather than a custom widget so it
+     * is keyboard-navigable and screen-reader-sane for free, and the face sample gives
+     * the visual recognition a name list does not.
+     */
+    function buildPeoplePicker(idPrefix, selected, legendText, describedBy) {
+        const chosen = {};
+        (selected || []).forEach(function (name) { chosen[name] = true; });
+
+        if (!knownFaces.length) {
+            return {
+                node: el('p', {
+                    className: 'field-hint',
+                    text: 'No reference faces are set up yet, so there is nobody to ' +
+                          'pick from. Add folders under reference_faces/ first.'
+                }),
+                selected: function () { return []; }
+            };
+        }
+
+        const boxes = knownFaces.map(function (face) {
+            const id = idPrefix + '-' + face.name;
+            const box = el('input', {type: 'checkbox', id: id, value: face.name});
+            box.checked = !!chosen[face.name];
+            const img = el('img', {
+                className: 'picker-face',
+                src: '/api/face-sample/' + encodeURIComponent(face.name),
+                alt: ''
+            });
+            img.addEventListener('error', function () { img.remove(); });
+            return el('div', {className: 'picker-item'}, [
+                box,
+                el('label', {for: id}, [img, el('span', {text: face.display_name})])
+            ]);
+        });
+
+        const fieldset = el('fieldset', {className: 'people-picker'}, [
+            el('legend', {text: legendText})
+        ].concat(boxes));
+        if (describedBy) {
+            fieldset.setAttribute('aria-describedby', describedBy);
+        }
+
+        return {
+            node: fieldset,
+            selected: function () {
+                return boxes
+                    .map(function (item) { return item.querySelector('input'); })
+                    .filter(function (box) { return box.checked; })
+                    .map(function (box) { return box.value; });
+            }
+        };
+    }
+
     function buildMarginNote(image) {
         const textareaId = 'hint-' + image.image_key;
         const locationId = 'hint-loc-' + image.image_key;
@@ -413,6 +490,14 @@
         });
         locationInput.value = storedLocation;
 
+        const hintId = 'people-hint-' + image.image_key;
+        const picker = buildPeoplePicker(
+            'who-' + image.image_key,
+            (hints.image_people && hints.image_people[image.image_key]) || [],
+            'Who is in this frame?',
+            hintId
+        );
+
         const status = el('p', {
             className: 'note-status',
             id: statusId,
@@ -426,7 +511,7 @@
             text: 'Save note & re-read'
         });
         button.addEventListener('click', function () {
-            regenerate(image.image_key, textarea, locationInput, status, button);
+            regenerate(image.image_key, textarea, locationInput, picker, status, button);
         });
 
         return el('div', {className: 'margin-note'}, [
@@ -450,6 +535,15 @@
                 text: 'Replaces the place name resolved from GPS, for the caption and ' +
                       'the keywords both. Leave blank to keep the resolved one.'
             }),
+            picker.node,
+            el('p', {
+                className: 'field-hint',
+                id: hintId,
+                text: 'For faces the recogniser missed. Tick everyone in the frame, ' +
+                      'including anyone it already got right - this replaces its list, ' +
+                      'and feeds the caption and the keywords. Leave all unticked to ' +
+                      'trust the recogniser.'
+            }),
             el('div', {className: 'note-actions'}, [button, status])
         ]);
     }
@@ -464,11 +558,11 @@
      * dialog makes the rest of the page inert, so no re-read can start while
      * it is open.
      */
-    async function regenerate(imageKey, textarea, locationInput, status, button) {
+    async function regenerate(imageKey, textarea, locationInput, picker, status, button) {
         regenerating += 1;
         syncWriteButton();
         try {
-            await regenerateFrame(imageKey, textarea, locationInput, status, button);
+            await regenerateFrame(imageKey, textarea, locationInput, picker, status, button);
         } finally {
             regenerating -= 1;
             syncWriteButton();
@@ -479,7 +573,7 @@
      * Save the image-scope hint, then re-run that one image.
      * Only this card shows a spinner and only this card is replaced.
      */
-    async function regenerateFrame(imageKey, textarea, locationInput, status, button) {
+    async function regenerateFrame(imageKey, textarea, locationInput, picker, status, button) {
         const card = dom.grid.querySelector(
             '.image-card[data-image-key="' + cssEscape(imageKey) + '"]'
         );
@@ -492,13 +586,18 @@
                 scope: 'image',
                 key: imageKey,
                 text: textarea.value,
-                location: locationInput.value
+                location: locationInput.value,
+                people: picker.selected()
             });
             hints.images[imageKey] = textarea.value.trim();
             if (!hints.image_locations) {
                 hints.image_locations = {};
             }
             hints.image_locations[imageKey] = locationInput.value.trim();
+            if (!hints.image_people) {
+                hints.image_people = {};
+            }
+            hints.image_people[imageKey] = picker.selected();
         } catch (error) {
             S.announce(status, 'Could not save the note: ' + error.message, 'error');
             setCardBusy(card, false);

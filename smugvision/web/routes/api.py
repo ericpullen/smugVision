@@ -301,6 +301,8 @@ def _job_hints(service: PreviewService, job) -> Dict[str, Any]:
         "images": {},
         "album_location": "",
         "image_locations": {},
+        "album_people": [],
+        "image_people": {},
     }
 
     manager = service.hints
@@ -316,6 +318,8 @@ def _job_hints(service: PreviewService, job) -> Dict[str, Any]:
     images = stored.get("images", {})
     locations = stored.get("locations", {})
     image_locations = locations.get("images", {})
+    people = stored.get("people", {})
+    image_people = people.get("images", {})
     return {
         "enabled": True,
         "global": stored.get("global", ""),
@@ -327,6 +331,11 @@ def _job_hints(service: PreviewService, job) -> Dict[str, Any]:
         "album_location": locations.get("albums", {}).get(job.album_key, ""),
         "image_locations": {
             result.image_key: image_locations.get(result.image_key, "")
+            for result in job.results
+        },
+        "album_people": list(people.get("albums", {}).get(job.album_key, [])),
+        "image_people": {
+            result.image_key: list(image_people.get(result.image_key, []))
             for result in job.results
         },
     }
@@ -472,6 +481,10 @@ def put_hint():
     # whatever is stored alone"; present-but-empty means "clear the override".
     has_location = "location" in data
     location = data.get("location", "")
+    # Same contract for people: absent leaves the stored override alone, present-and-
+    # empty clears it.
+    has_people = "people" in data
+    people = data.get("people")
 
     if not scope:
         return jsonify({"error": "Missing 'scope' in request body"}), 400
@@ -479,6 +492,8 @@ def put_hint():
         return jsonify({"error": "'text' must be a string"}), 400
     if has_location and not isinstance(location, str):
         return jsonify({"error": "'location' must be a string"}), 400
+    if has_people and people is not None and not isinstance(people, list):
+        return jsonify({"error": "'people' must be a list of reference-face names"}), 400
 
     try:
         service = get_preview_service()
@@ -494,6 +509,8 @@ def put_hint():
         manager.set_hint(scope, text, key)
         if has_location:
             manager.set_location(scope, location, key)
+        if has_people:
+            manager.set_people(scope, people, key)
 
         normalized = scope.strip().lower()
         stored = manager.get_all()
@@ -507,12 +524,16 @@ def put_hint():
         locations = stored.get("locations", {})
         section = "albums" if normalized == "album" else "images"
         stored_location = locations.get(section, {}).get(key, "") if key else ""
+        stored_people = (
+            stored.get("people", {}).get(section, {}).get(key, []) if key else []
+        )
 
         return jsonify({
             "scope": normalized,
             "key": key,
             "text": value,
             "location": stored_location,
+            "people": stored_people,
             "cleared": not value,
             "count": manager.hint_count,
         })

@@ -532,6 +532,28 @@ class ImageProcessor:
                 elif total_faces:
                     logger.info(f"  Detected {total_faces} face(s), none identified")
 
+            # A people override from hints.yaml replaces the recognised set outright.
+            # This has to happen here, not via a free-text note: the recognised names
+            # also feed the keywords (MetadataFormatter.format_tags), the relationships
+            # lookup and result.detected_faces, none of which a note can reach. Applied
+            # even when face_recognition is disabled entirely, so naming people works
+            # without a working recogniser.
+            people_override: Optional[List[str]] = None
+            if self.hints:
+                people_override = self.hints.resolve_people(album.album_key, image.image_key)
+            if people_override:
+                previous = ", ".join(person_names) if person_names else "nobody recognised"
+                raw_names = people_override
+                person_names = [name.replace("_", " ") for name in raw_names]
+                # Detection may have found fewer faces than the user named (a face in
+                # profile, or turned away). Never claim fewer people than are named, or
+                # the prompt would say "some of them are" about a complete list.
+                total_faces = max(total_faces, len(raw_names))
+                result.faces_detected = total_faces
+                logger.info(
+                    f"  People (hint override): {', '.join(person_names)} " f"(was: {previous})"
+                )
+
             # Generate caption and tags
             caption_instruction = self.config.get("prompts.caption", DEFAULT_CAPTION_PROMPT)
             tags_instruction = self.config.get("prompts.tags", DEFAULT_TAGS_PROMPT)

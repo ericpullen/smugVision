@@ -75,6 +75,18 @@ _FILE_HEADER = """# smugVision hints
 #     images:
 #       Pv5LtBn: "Warthog Overlook, Louisville Zoo"
 #
+# WHO IS IN A PHOTO works the same way, for faces the recogniser missed - a mask, a hat,
+# an odd angle, a child who looked different three years ago. Names are the
+# reference_faces/ directory names, underscores intact, because relationships.yaml is
+# keyed on that form. This REPLACES the recognised list, so name everyone in the photo
+# including anyone it already got right, and unlike a note it reaches the keywords too.
+#
+#   people:
+#     albums:
+#       Qz8RcT: [Ada_Rivera, Nina_Rivera]
+#     images:
+#       Mw4HjXs: [Ada_Rivera]
+#
 # Edit by hand or through the web UI; either way the other side picks up the change.
 """
 
@@ -117,6 +129,10 @@ class HintManager:
         # existed keeps loading unchanged and a bare string is never ambiguous.
         self._album_locations: Dict[str, str] = {}
         self._image_locations: Dict[str, str] = {}
+        # People overrides: reference-face names, stored in the underscore form used by
+        # reference_faces/ and matched by relationships.yaml.
+        self._album_people: Dict[str, List[str]] = {}
+        self._image_people: Dict[str, List[str]] = {}
         self._mtime: Optional[float] = None
         self._loaded = False
 
@@ -140,6 +156,8 @@ class HintManager:
         self._images = {}
         self._album_locations = {}
         self._image_locations = {}
+        self._album_people = {}
+        self._image_people = {}
         self._mtime = None
         self._loaded = True
 
@@ -195,6 +213,21 @@ class HintManager:
             )
             self._album_locations = {}
             self._image_locations = {}
+
+        people = data.get("people")
+        if people is None:
+            self._album_people = {}
+            self._image_people = {}
+        elif isinstance(people, dict):
+            self._album_people = self._coerce_people_section(people.get("albums"), "people.albums")
+            self._image_people = self._coerce_people_section(people.get("images"), "people.images")
+        else:
+            logger.warning(
+                f"Ignoring 'people' in {self.hints_file}: expected a mapping with "
+                f"'albums' and/or 'images' keys, got {type(people).__name__}"
+            )
+            self._album_people = {}
+            self._image_people = {}
 
         count = self.hint_count
         logger.debug(
@@ -302,6 +335,94 @@ class HintManager:
     # Resolution
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _coerce_people_section(value: Any, section: str) -> Dict[str, List[str]]:
+        """Coerce a ``people.albums`` / ``people.images`` YAML section into name lists.
+
+        Accepts a YAML list of names, or a single string (split on commas, so
+        hand-editing is forgiving). Names keep the underscore form used by
+        ``reference_faces/`` directories, because that is what ``relationships.yaml``
+        matches on and what the vision layer expects.
+
+        Args:
+            value: Raw value of the section from the YAML document
+            section: Section name, used for log messages
+
+        Returns:
+            Mapping of key to list of names, excluding empty entries
+        """
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            logger.warning(
+                f"Ignoring '{section}': expected a mapping of key to a list of names, "
+                f"got {type(value).__name__}"
+            )
+            return {}
+
+        result: Dict[str, List[str]] = {}
+        for raw_key, raw_names in value.items():
+            key = str(raw_key).strip()
+            if not key:
+                logger.warning(f"Ignoring entry in '{section}' with an empty key")
+                continue
+
+            if isinstance(raw_names, str):
+                candidates: List[Any] = list(raw_names.split(","))
+            elif isinstance(raw_names, (list, tuple)):
+                candidates = list(raw_names)
+            else:
+                logger.warning(
+                    f"Ignoring '{section}[{key}]': expected a list of names, got "
+                    f"{type(raw_names).__name__}"
+                )
+                continue
+
+            names: List[str] = []
+            for candidate in candidates:
+                name = str(candidate).strip()
+                if name and name not in names:
+                    names.append(name)
+            if names:
+                result[key] = names
+        return result
+
+    def resolve_people(
+        self, album_key: Optional[str], image_key: Optional[str]
+    ) -> Optional[List[str]]:
+        """Resolve who is in a photo, when the user has said so explicitly.
+
+        Face recognition misses people - a mask, a hat, an odd angle, or a child who
+        looked different three years ago. A free-text note can get a name into the
+        caption but cannot get it into the keywords, because those come from the
+        recognised-name list. An override replaces that list, so the caption, the
+        keywords and the relationships lookup all see the same people.
+
+        Replaces rather than adds, so there is one rule: list everyone in the photo,
+        including anyone recognition already got right. The most specific scope wins
+        outright - an image override beats an album one - and there is no global scope,
+        since the same people are not in every photo.
+
+        Args:
+            album_key: SmugMug album key, or ``None`` to skip the album scope
+            image_key: SmugMug image key, or ``None`` to skip the image scope
+
+        Returns:
+            Names in the underscore form (``["Ada_Rivera"]``), or ``None`` when no
+            override applies. An empty list is never returned; clearing removes the entry.
+        """
+        self._ensure_fresh()
+
+        if image_key:
+            names = self._image_people.get(str(image_key).strip())
+            if names:
+                return list(names)
+        if album_key:
+            names = self._album_people.get(str(album_key).strip())
+            if names:
+                return list(names)
+        return None
+
     def resolve_location(self, album_key: Optional[str], image_key: Optional[str]) -> Optional[str]:
         """Resolve the location override that applies to one image.
 
@@ -382,6 +503,10 @@ class HintManager:
             "locations": {
                 "albums": dict(self._album_locations),
                 "images": dict(self._image_locations),
+            },
+            "people": {
+                "albums": {k: list(v) for k, v in self._album_people.items()},
+                "images": {k: list(v) for k, v in self._image_people.items()},
             },
         }
 
@@ -480,6 +605,83 @@ class HintManager:
             RuntimeError: If PyYAML is unavailable
         """
         self.set_location(scope, "", key)
+
+    def set_people(self, scope: str, names: Optional[List[str]], key: Optional[str] = None) -> None:
+        """Store who is in a photo (or album) and persist it immediately.
+
+        An empty list or ``None`` clears the override, so a UI can clear it by
+        submitting nothing checked.
+
+        Args:
+            scope: ``"album"`` or ``"image"``. ``"global"`` is rejected - the same
+                people are not in every photo.
+            names: Reference-face names in the underscore form, e.g.
+                ``["Ada_Rivera", "Nina_Rivera"]``. Order is preserved; duplicates and
+                blanks are dropped. Names are NOT checked against ``reference_faces/``,
+                so a name with no reference images still reaches the caption - it simply
+                cannot be face-matched.
+            key: SmugMug album key or image key. Required.
+
+        Raises:
+            ValueError: If the scope is unknown or ``"global"``, ``key`` is missing, or
+                ``names`` is not a list of strings
+            RuntimeError: If PyYAML is unavailable, so the value cannot be persisted
+        """
+        scope, key = self._validate_scope(scope, key)
+        if scope == SCOPE_GLOBAL:
+            raise ValueError(
+                "A people override needs an album or image scope; 'global' is not "
+                "meaningful for who is in a photo"
+            )
+
+        if names is None:
+            names = []
+        if isinstance(names, str) or not isinstance(names, (list, tuple)):
+            raise ValueError("'names' must be a list of reference-face names")
+
+        clean: List[str] = []
+        for candidate in names:
+            name = str(candidate).strip()
+            if name and name not in clean:
+                clean.append(name)
+
+        self._ensure_fresh()
+        section = self._people_section(scope)
+
+        if not clean:
+            removed = section.pop(key, None) is not None
+            self._save()
+            if removed:
+                logger.info(f"Cleared {scope} people override for {key}")
+            return
+
+        section[key] = clean
+        self._save()
+        logger.info(f"Stored {scope} people override for {key}: {', '.join(clean)}")
+
+    def clear_people(self, scope: str, key: Optional[str] = None) -> None:
+        """Remove a people override and persist the removal immediately.
+
+        Args:
+            scope: ``"album"`` or ``"image"``
+            key: SmugMug album key or image key. Required.
+
+        Raises:
+            ValueError: If the scope is unknown or ``"global"``, or ``key`` is missing
+            RuntimeError: If PyYAML is unavailable
+        """
+        self.set_people(scope, [], key)
+
+    def _people_section(self, scope: str) -> Dict[str, List[str]]:
+        """Return the mutable people-override mapping for a keyed scope.
+
+        Args:
+            scope: ``"album"`` or ``"image"``, already validated
+
+        Returns:
+            The live dict for that scope
+        """
+        return self._album_people if scope == SCOPE_ALBUM else self._image_people
 
     def _location_section(self, scope: str) -> Dict[str, str]:
         """Return the mutable location-override mapping for a keyed scope.
@@ -584,6 +786,10 @@ class HintManager:
             "locations": {
                 "albums": dict(sorted(self._album_locations.items())),
                 "images": dict(sorted(self._image_locations.items())),
+            },
+            "people": {
+                "albums": {k: list(v) for k, v in sorted(self._album_people.items())},
+                "images": {k: list(v) for k, v in sorted(self._image_people.items())},
             },
         }
 
