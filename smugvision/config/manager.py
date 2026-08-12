@@ -34,8 +34,8 @@ class ConfigManager:
     
     Examples:
         >>> config = ConfigManager.load("config.yaml")
-        >>> print(config.get("vision.model"))
-        'llama3.2-vision'
+        >>> print(config.get("vision.endpoint"))
+        'http://localhost:11434'
         >>> print(config.get("smugmug.api_key"))
         'your_api_key'
     """
@@ -322,8 +322,8 @@ class ConfigManager:
             Configuration value or default
             
         Examples:
-            >>> config.get("vision.model")
-            'llama3.2-vision'
+            >>> config.get("vision.endpoint")
+            'http://localhost:11434'
             >>> config.get("vision.temperature")
             0.7
             >>> config.get("nonexistent.key", "default_value")

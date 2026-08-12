@@ -1,5 +1,5 @@
 # Core dependencies
-ollama>=0.1.0
+ollama>=0.5.0  # 0.5.0 added Client.chat(think=...); dict `format` needs >=0.4.0
 pillow>=10.0.0
 pillow-heif>=0.13.0  # For HEIC/HEIF image support
 pyyaml>=6.0
@@ -8,11 +8,19 @@ requests-oauthlib>=1.3.1  # For SmugMug OAuth 1.0a authentication
 python-dateutil>=2.8.2
 flask>=3.0.0  # For web UI
 
-# Face recognition (optional)
+# Face recognition - dlib backend (the default, face_recognition.backend: "dlib")
 face-recognition>=1.3.0  # For face detection and recognition (requires dlib)
-setuptools>=65.0.0  # Required by face_recognition_models
+setuptools>=65.0.0  # Required by face_recognition_models (which imports pkg_resources)
 # Note: After installing face-recognition, also install models:
 # pip install git+https://github.com/ageitgey/face_recognition_models
+# Known issue: setuptools 81+ removed pkg_resources, which face_recognition_models
+# imports. If face recognition reports itself unavailable, pin setuptools<81.
+
+# Face recognition - InsightFace backend (optional, experimental)
+# Only needed if you set face_recognition.backend: "insightface" in config.yaml.
+# Equivalent to: pip install -e ".[insightface]"
+# insightface>=0.7.3
+# onnxruntime>=1.16.0
 
 # Optional dependencies
 geopy>=2.4.0  # For reverse geocoding (optional, falls back gracefully if not installed)

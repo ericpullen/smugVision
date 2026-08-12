@@ -17,7 +17,7 @@ keywords = [
     "vision",
     "metadata",
     "photos",
-    "llama",
+    "ollama",
     "face-recognition",
     "computer-vision",
     "photo-management",
@@ -44,7 +44,9 @@ dependencies = [
     "requests-oauthlib>=1.3.1",
     "PyYAML>=6.0",
     "Pillow>=10.0.0",
-    "ollama>=0.1.0",
+    # 0.5.0 is where Client.chat gained the `think` parameter; dict `format`
+    # (JSON-Schema structured output) needs >= 0.4.0.
+    "ollama>=0.5.0",
     "face-recognition>=1.3.0",
     "pillow-heif>=0.13.0",
     "flask>=3.0.0",
@@ -57,6 +59,13 @@ dev = [
     "black>=23.0",
     "flake8>=6.0",
     "mypy>=1.0",
+]
+# Optional, experimental alternative face recognition backend (ArcFace via ONNX).
+# Only needed when face_recognition.backend is set to "insightface"; dlib remains
+# the default and requires nothing extra.
+insightface = [
+    "insightface>=0.7.3",
+    "onnxruntime>=1.16.0",
 ]
 
 [project.urls]
