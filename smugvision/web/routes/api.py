@@ -291,25 +291,42 @@ def _job_hints(service: PreviewService, job) -> Dict[str, Any]:
         job: PreviewJob whose album and images should be reported
 
     Returns:
-        ``{"enabled": bool, "global": str, "album": str, "images": {image_key: str}}``
+        ``{"enabled": bool, "global": str, "album": str, "images": {image_key: str},
+        "album_location": str, "image_locations": {image_key: str}}``
     """
+    empty = {
+        "enabled": False,
+        "global": "",
+        "album": "",
+        "images": {},
+        "album_location": "",
+        "image_locations": {},
+    }
+
     manager = service.hints
     if manager is None:
-        return {"enabled": False, "global": "", "album": "", "images": {}}
+        return empty
 
     try:
         stored = manager.get_all()
     except Exception as e:
         logger.warning(f"Could not read hints for job {job.job_id}: {e}")
-        return {"enabled": False, "global": "", "album": "", "images": {}}
+        return empty
 
     images = stored.get("images", {})
+    locations = stored.get("locations", {})
+    image_locations = locations.get("images", {})
     return {
         "enabled": True,
         "global": stored.get("global", ""),
         "album": stored.get("albums", {}).get(job.album_key, ""),
         "images": {
             result.image_key: images.get(result.image_key, "")
+            for result in job.results
+        },
+        "album_location": locations.get("albums", {}).get(job.album_key, ""),
+        "image_locations": {
+            result.image_key: image_locations.get(result.image_key, "")
             for result in job.results
         },
     }
@@ -451,11 +468,17 @@ def put_hint():
     scope = _string_field(data, "scope")
     key = _string_field(data, "key") or None
     text = data.get("text", "")
+    # A location override is optional and independent of the note. Absent means "leave
+    # whatever is stored alone"; present-but-empty means "clear the override".
+    has_location = "location" in data
+    location = data.get("location", "")
 
     if not scope:
         return jsonify({"error": "Missing 'scope' in request body"}), 400
     if not isinstance(text, str):
         return jsonify({"error": "'text' must be a string"}), 400
+    if has_location and not isinstance(location, str):
+        return jsonify({"error": "'location' must be a string"}), 400
 
     try:
         service = get_preview_service()
@@ -469,6 +492,8 @@ def put_hint():
 
         # HintManager owns scope validation, so the API cannot drift from the CLI.
         manager.set_hint(scope, text, key)
+        if has_location:
+            manager.set_location(scope, location, key)
 
         normalized = scope.strip().lower()
         stored = manager.get_all()
@@ -479,10 +504,15 @@ def put_hint():
         else:
             value = stored.get("images", {}).get(key, "")
 
+        locations = stored.get("locations", {})
+        section = "albums" if normalized == "album" else "images"
+        stored_location = locations.get(section, {}).get(key, "") if key else ""
+
         return jsonify({
             "scope": normalized,
             "key": key,
             "text": value,
+            "location": stored_location,
             "cleared": not value,
             "count": manager.hint_count,
         })

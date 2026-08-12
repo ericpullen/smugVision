@@ -62,6 +62,19 @@ _FILE_HEADER = """# smugVision hints
 #   images:
 #     Xy7NpQr: "The white ribbed object is a Nylabone dog chew."
 #
+# A note reaches the prompt only. To correct a WRONG PLACE, use a location override
+# instead: a note has to argue with the geocoded name that is in the prompt beside it,
+# and it never reaches the keywords or the location shown in the UI. An override
+# replaces the resolved place outright, so caption, keywords and UI all agree. The
+# most specific scope wins - an image override beats an album one - and there is no
+# global scope, because a location that applied to every photo would not be a location.
+#
+#   locations:
+#     albums:
+#       Kd2WmR: "Gorilla Enclosure, Louisville Zoo"
+#     images:
+#       Pv5LtBn: "Warthog Overlook, Louisville Zoo"
+#
 # Edit by hand or through the web UI; either way the other side picks up the change.
 """
 
@@ -99,6 +112,11 @@ class HintManager:
         self._global: str = ""
         self._albums: Dict[str, str] = {}
         self._images: Dict[str, str] = {}
+        # Location overrides live in their own `locations:` section rather than turning
+        # each note entry into a mapping, so every hints.yaml written before this
+        # existed keeps loading unchanged and a bare string is never ambiguous.
+        self._album_locations: Dict[str, str] = {}
+        self._image_locations: Dict[str, str] = {}
         self._mtime: Optional[float] = None
         self._loaded = False
 
@@ -120,6 +138,8 @@ class HintManager:
         self._global = ""
         self._albums = {}
         self._images = {}
+        self._album_locations = {}
+        self._image_locations = {}
         self._mtime = None
         self._loaded = True
 
@@ -157,11 +177,31 @@ class HintManager:
         self._albums = self._coerce_section(data.get("albums"), "albums")
         self._images = self._coerce_section(data.get("images"), "images")
 
+        locations = data.get("locations")
+        if locations is None:
+            self._album_locations = {}
+            self._image_locations = {}
+        elif isinstance(locations, dict):
+            self._album_locations = self._coerce_section(
+                locations.get("albums"), "locations.albums"
+            )
+            self._image_locations = self._coerce_section(
+                locations.get("images"), "locations.images"
+            )
+        else:
+            logger.warning(
+                f"Ignoring 'locations' in {self.hints_file}: expected a mapping with "
+                f"'albums' and/or 'images' keys, got {type(locations).__name__}"
+            )
+            self._album_locations = {}
+            self._image_locations = {}
+
         count = self.hint_count
         logger.debug(
             f"Loaded {count} hint(s) from {self.hints_file}: "
             f"global={'yes' if self._global else 'no'}, "
-            f"albums={len(self._albums)}, images={len(self._images)}"
+            f"albums={len(self._albums)}, images={len(self._images)}, "
+            f"location overrides={len(self._album_locations) + len(self._image_locations)}"
         )
         return count
 
@@ -262,6 +302,39 @@ class HintManager:
     # Resolution
     # ------------------------------------------------------------------
 
+    def resolve_location(self, album_key: Optional[str], image_key: Optional[str]) -> Optional[str]:
+        """Resolve the location override that applies to one image.
+
+        A location is a single value, not something that concatenates, so the most
+        specific scope wins outright: an image override beats an album override. There
+        is deliberately no global scope - a location that applied to every photo you
+        ever take would not be a location.
+
+        Free-text notes cannot do this job. A note only reaches the prompt, where it
+        has to argue with the geocoded place name the pipeline injects alongside it,
+        and it never reaches the location tags, the appended caption suffix, or the
+        location shown in the UI. An override replaces the resolved value at source so
+        all four agree.
+
+        Args:
+            album_key: SmugMug album key, or ``None`` to skip the album scope
+            image_key: SmugMug image key, or ``None`` to skip the image scope
+
+        Returns:
+            The overriding location string, or ``None`` when no override applies
+        """
+        self._ensure_fresh()
+
+        if image_key:
+            value = self._image_locations.get(str(image_key).strip())
+            if value:
+                return value
+        if album_key:
+            value = self._album_locations.get(str(album_key).strip())
+            if value:
+                return value
+        return None
+
     def resolve(self, album_key: Optional[str], image_key: Optional[str]) -> str:
         """Resolve the hint text that applies to one image.
 
@@ -306,6 +379,10 @@ class HintManager:
             SCOPE_GLOBAL: self._global,
             "albums": dict(self._albums),
             "images": dict(self._images),
+            "locations": {
+                "albums": dict(self._album_locations),
+                "images": dict(self._image_locations),
+            },
         }
 
     @property
@@ -353,6 +430,67 @@ class HintManager:
             f"Stored {scope} hint{f' for {key}' if key else ''} "
             f"({len(clean)} chars) in {self.hints_file}"
         )
+
+    def set_location(self, scope: str, location: str, key: Optional[str] = None) -> None:
+        """Store a location override and persist it immediately.
+
+        Blank text clears the override, so a UI can clear it with an empty input.
+
+        Args:
+            scope: ``"album"`` or ``"image"``. ``"global"`` is rejected - a location
+                that applied to every photo would not be a location.
+            location: The place name to use instead of the geocoded one. Blank clears.
+            key: SmugMug album key or image key. Required.
+
+        Raises:
+            ValueError: If the scope is unknown or ``"global"``, or ``key`` is missing
+            RuntimeError: If PyYAML is unavailable, so the value cannot be persisted
+        """
+        scope, key = self._validate_scope(scope, key)
+        if scope == SCOPE_GLOBAL:
+            raise ValueError(
+                "A location override needs an album or image scope; 'global' is not "
+                "meaningful for a location"
+            )
+
+        clean = self._coerce_text(location, f"locations.{scope}")
+        self._ensure_fresh()
+        section = self._location_section(scope)
+
+        if not clean:
+            removed = section.pop(key, None) is not None
+            self._save()
+            if removed:
+                logger.info(f"Cleared {scope} location override for {key}")
+            return
+
+        section[key] = clean
+        self._save()
+        logger.info(f"Stored {scope} location override for {key}: {clean}")
+
+    def clear_location(self, scope: str, key: Optional[str] = None) -> None:
+        """Remove a location override and persist the removal immediately.
+
+        Args:
+            scope: ``"album"`` or ``"image"``
+            key: SmugMug album key or image key. Required.
+
+        Raises:
+            ValueError: If the scope is unknown or ``"global"``, or ``key`` is missing
+            RuntimeError: If PyYAML is unavailable
+        """
+        self.set_location(scope, "", key)
+
+    def _location_section(self, scope: str) -> Dict[str, str]:
+        """Return the mutable location-override mapping for a keyed scope.
+
+        Args:
+            scope: ``"album"`` or ``"image"``, already validated
+
+        Returns:
+            The live dict for that scope
+        """
+        return self._album_locations if scope == SCOPE_ALBUM else self._image_locations
 
     def clear_hint(self, scope: str, key: Optional[str] = None) -> None:
         """Remove a hint and persist the removal immediately.
@@ -443,6 +581,10 @@ class HintManager:
             SCOPE_GLOBAL: self._global,
             "albums": dict(sorted(self._albums.items())),
             "images": dict(sorted(self._images.items())),
+            "locations": {
+                "albums": dict(sorted(self._album_locations.items())),
+                "images": dict(sorted(self._image_locations.items())),
+            },
         }
 
         self.hints_file.parent.mkdir(parents=True, exist_ok=True)

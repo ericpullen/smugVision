@@ -48,6 +48,7 @@
         dom.albumHint = document.getElementById('album-hint');
         dom.albumHintBtn = document.getElementById('album-hint-btn');
         dom.albumHintStatus = document.getElementById('album-hint-status');
+        dom.albumLocation = document.getElementById('album-location');
         dom.globalHintSummary = document.getElementById('global-hint-summary');
 
         dom.writePanel = document.getElementById('write-panel');
@@ -146,6 +147,7 @@
         }
 
         dom.albumHint.value = hints.album || '';
+        dom.albumLocation.value = hints.album_location || '';
 
         if (hints.global) {
             S.setChildren(dom.globalHintSummary, [
@@ -170,10 +172,13 @@
             const result = await S.apiPut('/api/hints', {
                 scope: 'album',
                 key: albumKey,
-                text: dom.albumHint.value
+                text: dom.albumHint.value,
+                location: dom.albumLocation.value
             });
             hints.album = result.text;
             dom.albumHint.value = result.text;
+            hints.album_location = result.location || '';
+            dom.albumLocation.value = hints.album_location;
             S.announce(
                 dom.albumHintStatus,
                 result.cleared
@@ -385,8 +390,11 @@
 
     function buildMarginNote(image) {
         const textareaId = 'hint-' + image.image_key;
+        const locationId = 'hint-loc-' + image.image_key;
         const statusId = 'hint-status-' + image.image_key;
         const stored = (hints.images && hints.images[image.image_key]) || '';
+        const storedLocation =
+            (hints.image_locations && hints.image_locations[image.image_key]) || '';
 
         const textarea = el('textarea', {
             id: textareaId,
@@ -394,6 +402,16 @@
             placeholder: 'e.g. The white ribbed object is a Nylabone dog chew, not food.'
         });
         textarea.value = stored;
+
+        // A location is a value to replace, not a fact to argue with. A note only
+        // reaches the prompt; this replaces the geocoded place outright so the caption,
+        // the keywords and the LOCATION field above all agree.
+        const locationInput = el('input', {
+            id: locationId,
+            type: 'text',
+            placeholder: 'e.g. Gorilla Enclosure, Louisville Zoo'
+        });
+        locationInput.value = storedLocation;
 
         const status = el('p', {
             className: 'note-status',
@@ -408,7 +426,7 @@
             text: 'Save note & re-read'
         });
         button.addEventListener('click', function () {
-            regenerate(image.image_key, textarea, status, button);
+            regenerate(image.image_key, textarea, locationInput, status, button);
         });
 
         return el('div', {className: 'margin-note'}, [
@@ -421,6 +439,16 @@
                 className: 'field-hint',
                 text: 'A fact the model must accept over its own guess. Saving ' +
                       're-reads only this frame.'
+            }),
+            el('label', {for: locationId}, [
+                document.createTextNode('Correct location for this frame'),
+                el('span', {className: 'scope-tag', text: 'overrides GPS'})
+            ]),
+            locationInput,
+            el('p', {
+                className: 'field-hint',
+                text: 'Replaces the place name resolved from GPS, for the caption and ' +
+                      'the keywords both. Leave blank to keep the resolved one.'
             }),
             el('div', {className: 'note-actions'}, [button, status])
         ]);
@@ -436,11 +464,11 @@
      * dialog makes the rest of the page inert, so no re-read can start while
      * it is open.
      */
-    async function regenerate(imageKey, textarea, status, button) {
+    async function regenerate(imageKey, textarea, locationInput, status, button) {
         regenerating += 1;
         syncWriteButton();
         try {
-            await regenerateFrame(imageKey, textarea, status, button);
+            await regenerateFrame(imageKey, textarea, locationInput, status, button);
         } finally {
             regenerating -= 1;
             syncWriteButton();
@@ -451,7 +479,7 @@
      * Save the image-scope hint, then re-run that one image.
      * Only this card shows a spinner and only this card is replaced.
      */
-    async function regenerateFrame(imageKey, textarea, status, button) {
+    async function regenerateFrame(imageKey, textarea, locationInput, status, button) {
         const card = dom.grid.querySelector(
             '.image-card[data-image-key="' + cssEscape(imageKey) + '"]'
         );
@@ -463,9 +491,14 @@
             await S.apiPut('/api/hints', {
                 scope: 'image',
                 key: imageKey,
-                text: textarea.value
+                text: textarea.value,
+                location: locationInput.value
             });
             hints.images[imageKey] = textarea.value.trim();
+            if (!hints.image_locations) {
+                hints.image_locations = {};
+            }
+            hints.image_locations[imageKey] = locationInput.value.trim();
         } catch (error) {
             S.announce(status, 'Could not save the note: ' + error.message, 'error');
             setCardBusy(card, false);

@@ -43,6 +43,20 @@
                       placeholder="e.g. This is Biscuit's 7th birthday party. Biscuit is a black Labrador."></textarea>
         </div>
 
+        <div class="field">
+            <label for="album-location">
+                Correct location for this album
+                <span class="scope-tag">overrides GPS</span>
+            </label>
+            <input type="text" id="album-location"
+                   placeholder="e.g. Gorilla Enclosure, Louisville Zoo">
+            <p class="field-hint">
+                A note argues with the place name resolved from GPS and usually loses,
+                because that name is also in the prompt. This <em>replaces</em> it, for
+                the caption and the keywords both. Leave blank to keep the resolved one.
+            </p>
+        </div>
+
         <div class="button-row">
             <button type="button" class="secondary" id="album-hint-btn">Save album note</button>
             <span class="note-status" id="album-hint-status" role="status" aria-live="polite"></span>

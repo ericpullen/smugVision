@@ -480,6 +480,26 @@ class ImageProcessor:
                     has_coordinates=(latitude is not None and longitude is not None),
                 )
 
+            # A location override from hints.yaml replaces the resolved value outright,
+            # before anything downstream reads it. This has to happen here rather than
+            # via the prompt: the geocoded name also feeds the location tags, the
+            # caption suffix appended by MetadataFormatter, and result.location shown in
+            # the UI, none of which the model can influence. Left in the prompt only, a
+            # correction would argue with a geocoded name asserted alongside it and lose.
+            location_override: Optional[str] = None
+            if self.hints:
+                location_override = self.hints.resolve_location(album.album_key, image.image_key)
+            if location_override:
+                logger.info(
+                    f"  Location (hint override): {location_override} "
+                    f"(was: {location_string or 'unresolved'})"
+                )
+                location_string = location_override
+                # Aliases came from a custom-locations match that no longer applies.
+                location_aliases = []
+                # Treat it as user-asserted, same standing as a custom location.
+                is_custom = True
+
             # Update with resolved location data
             exif_location.location_name = location_string
             exif_location.location_aliases = location_aliases
@@ -556,12 +576,20 @@ class ImageProcessor:
                 person_names=person_names,
             )
 
-            # Extract location tags, including aliases from custom locations
-            location_tags = (
-                self._extract_location_tags(exif_location)
-                if exif_location.has_coordinates
-                else None
-            )
+            # Extract location tags, including aliases from custom locations. When the
+            # location was overridden by a hint, the geocoded components (city, county,
+            # state, country) describe a place the user has told us is wrong, so they are
+            # replaced by the override's own comma-separated parts rather than merged
+            # with them - otherwise the corrected caption would still carry the tags it
+            # was correcting.
+            if location_override:
+                location_tags = [
+                    part.strip() for part in location_override.split(",") if part.strip()
+                ]
+            elif exif_location.has_coordinates:
+                location_tags = self._extract_location_tags(exif_location)
+            else:
+                location_tags = None
 
             # Add location aliases as tags if configured
             if self.config.get("location.use_aliases_as_tags", True) and location_aliases:
