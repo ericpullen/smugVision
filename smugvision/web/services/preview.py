@@ -445,10 +445,13 @@ class PreviewService:
                 continue
             
             try:
+                # Mirror the CLI write path (ImageProcessor.process_image): passing None
+                # leaves a field untouched, so an empty proposed value must never be sent
+                # as "" - that would wipe the user's existing caption/keywords.
                 self.smugmug.update_image_metadata(
                     image_key=result.image_key,
-                    caption=result.proposed_caption,
-                    keywords=result.proposed_keywords
+                    caption=result.proposed_caption or None,
+                    keywords=result.proposed_keywords or None,
                 )
                 committed += 1
                 logger.info(f"Committed changes for {result.filename}")

@@ -702,7 +702,8 @@ class SmugMugClient:
         Args:
             image: AlbumImage object (can also be a video)
             destination: Destination directory path
-            size: Image size (Medium, Large, XLarge, X2Large, X3Large, Original, etc.)
+            size: Image size (Medium, Large, XLarge, X2Large, X3Large, Original, etc.).
+                  Matched case-insensitively, so "medium" and "Medium" both work.
                   Note: For videos, only Original is supported
             skip_if_exists: If True, skip download if file already exists
             
@@ -776,10 +777,15 @@ class SmugMugClient:
                             response_data = sizes_response.get("Response", sizes_response)
                             sizes_data = response_data.get("ImageSizes", {})
                             
-                            # Try to find the requested size
-                            size_key = f"{size}ImageUrl"
-                            if size_key in sizes_data:
-                                download_url = sizes_data[size_key]
+                            # Try to find the requested size. SmugMug's keys are
+                            # capitalized ("MediumImageUrl") while the configured size
+                            # is commonly lowercase ("medium"), so match case-insensitively.
+                            size_key = f"{size}ImageUrl".lower()
+                            matched_key = next(
+                                (k for k in sizes_data if k.lower() == size_key), None
+                            )
+                            if matched_key:
+                                download_url = sizes_data[matched_key]
                             # Fall back to LargestImageUrl if requested size not available
                             elif "LargestImageUrl" in sizes_data:
                                 logger.warning(f"Size '{size}' not available for {image.file_name}, using Largest")
@@ -788,7 +794,7 @@ class SmugMugClient:
                             logger.warning(f"Could not fetch image sizes: {e}")
             
             # For Original size, try ArchivedUri as fallback
-            if not download_url and size == "Original" and image.archived_uri:
+            if not download_url and size.lower() == "original" and image.archived_uri:
                 download_url = image.archived_uri
             
             # Last resort: try the largest available size from image metadata

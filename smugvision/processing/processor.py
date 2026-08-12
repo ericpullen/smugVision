@@ -1,7 +1,8 @@
 """Main image processing orchestrator."""
 
 import gc
-from typing import List, Optional, Dict, Any
+import re
+from typing import List, Optional
 from pathlib import Path
 from dataclasses import dataclass
 import logging
@@ -9,21 +10,24 @@ import time
 
 from ..config import ConfigManager
 from ..smugmug import SmugMugClient, AlbumImage, Album
-from ..smugmug.exceptions import SmugMugError
 from ..cache import CacheManager
 from ..vision import VisionModelFactory
 from ..vision.base import VisionModel
-from ..utils.exif import extract_exif_location, reverse_geocode, resolve_location_with_custom
+from ..utils.exif import extract_exif_location, resolve_location_with_custom
 from ..face.recognizer import FaceRecognizer
 from .metadata import MetadataFormatter
 
 logger = logging.getLogger(__name__)
 
+# Fallbacks used when prompts.caption / prompts.tags are absent from the config.
+DEFAULT_CAPTION_PROMPT = "Analyze this image and provide a concise, descriptive caption."
+DEFAULT_TAGS_PROMPT = "Generate 5-10 relevant keyword tags for this image."
+
 
 @dataclass
 class ProcessingResult:
     """Result of processing a single image.
-    
+
     Attributes:
         image_key: SmugMug image key
         filename: Image filename
@@ -31,10 +35,11 @@ class ProcessingResult:
         skipped: Whether image was skipped (already processed)
         caption_generated: Whether caption was generated
         tags_generated: Number of tags generated
-        faces_detected: Number of faces detected
+        faces_detected: Number of faces detected in the image, including faces that
+            could not be matched to a reference person
         processing_time: Time taken to process (seconds)
         error: Error message if failed
-        
+
         # Detailed results for UI/inspection
         current_caption: Original caption before processing
         current_keywords: Original keywords before processing
@@ -44,6 +49,7 @@ class ProcessingResult:
         location: Resolved location string
         location_aliases: Location aliases for tags
     """
+
     image_key: str
     filename: str
     success: bool
@@ -53,7 +59,7 @@ class ProcessingResult:
     faces_detected: int = 0
     processing_time: float = 0.0
     error: Optional[str] = None
-    
+
     # Detailed results for UI/inspection
     current_caption: Optional[str] = None
     current_keywords: Optional[List[str]] = None
@@ -67,7 +73,7 @@ class ProcessingResult:
 @dataclass
 class BatchProcessingStats:
     """Statistics for batch processing.
-    
+
     Attributes:
         total_images: Total number of images in album
         processed: Number successfully processed
@@ -76,13 +82,14 @@ class BatchProcessingStats:
         total_time: Total processing time (seconds)
         results: List of individual processing results
     """
+
     total_images: int
     processed: int = 0
     skipped: int = 0
     errors: int = 0
     total_time: float = 0.0
     results: List[ProcessingResult] = None
-    
+
     def __post_init__(self):
         if self.results is None:
             self.results = []
@@ -90,7 +97,7 @@ class BatchProcessingStats:
 
 class ImageProcessor:
     """Orchestrates the complete image processing pipeline.
-    
+
     This class coordinates:
     - Image download and caching
     - EXIF data extraction
@@ -99,7 +106,7 @@ class ImageProcessor:
     - Metadata formatting
     - SmugMug updates
     """
-    
+
     def __init__(
         self,
         config: ConfigManager,
@@ -107,10 +114,10 @@ class ImageProcessor:
         vision_model: Optional[VisionModel] = None,
         cache_manager: Optional[CacheManager] = None,
         face_recognizer: Optional[FaceRecognizer] = None,
-        dry_run: bool = False
+        dry_run: bool = False,
     ) -> None:
         """Initialize image processor.
-        
+
         Args:
             config: Configuration manager
             smugmug_client: SmugMug API client (created if not provided)
@@ -121,7 +128,7 @@ class ImageProcessor:
         """
         self.config = config
         self.dry_run = dry_run
-        
+
         # Initialize SmugMug client
         if smugmug_client:
             self.smugmug = smugmug_client
@@ -130,27 +137,43 @@ class ImageProcessor:
                 api_key=config.get("smugmug.api_key"),
                 api_secret=config.get("smugmug.api_secret"),
                 access_token=config.get("smugmug.user_token"),
-                access_token_secret=config.get("smugmug.user_secret")
+                access_token_secret=config.get("smugmug.user_secret"),
             )
-        
+
         # Initialize cache manager
         if cache_manager:
             self.cache = cache_manager
         else:
             cache_dir = config.get("cache.directory", "~/.smugvision/cache")
             self.cache = CacheManager(cache_dir)
-        
+
+        # Vision model behaviour flags (read before the model is built so they can be
+        # forwarded to it and used to pick the generation path in process_image)
+        self.vision_temperature = config.get("vision.temperature", 0.7)
+        self.vision_max_tokens = config.get("vision.max_tokens", 500)
+        self.vision_single_call = bool(config.get("vision.single_call", True))
+
         # Initialize vision model
         if vision_model:
             self.vision = vision_model
         else:
             model_name = config.get("vision.model", "llama3.2-vision")
-            endpoint = config.get("vision.endpoint", "http://localhost:11434")
+            # No literal fallback: an unset vision.endpoint must stay None so the ollama
+            # client resolves the host itself ($OLLAMA_HOST, else http://localhost:11434).
+            endpoint = config.get("vision.endpoint")
             self.vision = VisionModelFactory.create(
                 model_name=model_name,
-                endpoint=endpoint
+                endpoint=endpoint,
+                timeout=config.get("vision.timeout", 120),
+                think=config.get("vision.think", False),
+                keep_alive=config.get("vision.keep_alive", "30m"),
+                single_call=self.vision_single_call,
+                structured_output=config.get("vision.structured_output", True),
+                max_image_dimension=config.get("vision.max_image_dimension", 1568),
+                jpeg_quality=config.get("vision.jpeg_quality", 85),
+                validate_model=config.get("vision.validate_model", True),
             )
-        
+
         # Initialize face recognizer if enabled
         self.face_recognizer = None
         if config.get("face_recognition.enabled", True):
@@ -159,78 +182,101 @@ class ImageProcessor:
             else:
                 try:
                     from pathlib import Path as PathLib
+
                     reference_faces_dir = config.get(
-                        "face_recognition.reference_faces_dir",
-                        "~/.smugvision/reference_faces"
+                        "face_recognition.reference_faces_dir", "~/.smugvision/reference_faces"
                     )
                     # Expand ~ and convert to absolute path
                     reference_faces_path = PathLib(reference_faces_dir).expanduser()
-                    
+
                     # Get cache settings
                     use_cache = config.get("face_recognition.use_cache", True)
                     cache_dir = config.get(
-                        "face_recognition.cache_dir",
-                        "~/.smugvision/cache/face_encodings"
+                        "face_recognition.cache_dir", "~/.smugvision/cache/face_encodings"
                     )
                     cache_dir_path = PathLib(cache_dir).expanduser()
-                    
+
+                    # Backend selection ("dlib" or "insightface"); the per-backend
+                    # sub-block (e.g. face_recognition.insightface) supplies its options.
+                    backend = config.get("face_recognition.backend", "dlib") or "dlib"
+                    backend_options = config.get(f"face_recognition.{backend}", {}) or {}
+
                     # Only initialize if directory exists
                     if reference_faces_path.exists():
                         self.face_recognizer = FaceRecognizer(
                             str(reference_faces_path),
                             cache_dir=str(cache_dir_path),
-                            use_cache=use_cache
+                            use_cache=use_cache,
+                            backend=backend,
+                            backend_options=backend_options,
                         )
-                        logger.info(f"Face recognition enabled with {len(self.face_recognizer.reference_faces)} person(s)")
+                        logger.info(
+                            f"Face recognition enabled ({backend}) with "
+                            f"{len(self.face_recognizer.reference_faces)} person(s)"
+                        )
                     else:
-                        logger.info(f"Face recognition disabled: reference faces directory not found at {reference_faces_path}")
+                        logger.info(
+                            f"Face recognition disabled: reference faces directory "
+                            f"not found at {reference_faces_path}"
+                        )
                 except Exception as e:
                     logger.warning(f"Could not initialize face recognizer: {e}")
-        
+
         # Initialize metadata formatter
         self.formatter = MetadataFormatter(
             preserve_existing=config.get("processing.preserve_existing", True),
-            marker_tag=config.get("processing.marker_tag", "smugvision")
+            marker_tag=config.get("processing.marker_tag", "smugvision"),
         )
-        
-        # Store vision model parameters from config
-        self.vision_temperature = config.get("vision.temperature", 0.7)
-        self.vision_max_tokens = config.get("vision.max_tokens", 500)
-        
+
         logger.info(
             f"ImageProcessor initialized: model={self.vision.model_name}, "
-            f"max_tokens={self.vision_max_tokens}, dry_run={dry_run}"
+            f"max_tokens={self.vision_max_tokens}, single_call={self.vision_single_call}, "
+            f"dry_run={dry_run}"
         )
-    
+
+    def _use_single_call(self) -> bool:
+        """Decide whether to generate caption and tags in one inference call.
+
+        Returns:
+            True when vision.single_call is enabled and the vision model implements
+            generate_metadata (an injected legacy model may not)
+        """
+        if not self.vision_single_call:
+            return False
+        if not hasattr(self.vision, "generate_metadata"):
+            logger.debug(
+                f"{type(self.vision).__name__} has no generate_metadata(); "
+                f"using the two-call path"
+            )
+            return False
+        return True
+
     def process_album(
-        self,
-        album_key: str,
-        force_reprocess: bool = False,
-        skip_videos: bool = True
+        self, album_key: str, force_reprocess: bool = False, skip_videos: bool = True
     ) -> BatchProcessingStats:
         """Process all images in an album.
-        
+
         Args:
             album_key: SmugMug album key
             force_reprocess: If True, reprocess images with marker tag
             skip_videos: If True, skip video files
-            
+
         Returns:
             BatchProcessingStats with results
-            
+
         Raises:
             SmugMugError: If album cannot be accessed
         """
         logger.info(f"Starting album processing: {album_key}")
         start_time = time.time()
-        
+
         # Get album info
         album = self.smugmug.get_album(album_key)
         logger.info(f"Processing album: {album.name} ({album.image_count} items)")
-        
+
         # Get all images
         all_items = self.smugmug.get_album_images(album_key)
-        
+
         # Filter videos if requested
         if skip_videos:
             images = [img for img in all_items if not img.is_video]
@@ -239,105 +285,106 @@ class ImageProcessor:
                 logger.info(f"Skipping {videos_skipped} video file(s)")
         else:
             images = all_items
-        
+
         # Initialize stats
         stats = BatchProcessingStats(total_images=len(images))
-        
+
         if not images:
             logger.warning("No images to process in album")
             return stats
-        
+
         # Process each image
         for i, image in enumerate(images, 1):
             logger.info(f"[{i}/{len(images)}] Processing: {image.file_name}")
-            
-            result = self.process_image(
-                image=image,
-                album=album,
-                force_reprocess=force_reprocess
-            )
-            
+
+            result = self.process_image(image=image, album=album, force_reprocess=force_reprocess)
+
             stats.results.append(result)
-            
+
             if result.success:
                 stats.processed += 1
             elif result.skipped:
                 stats.skipped += 1
             else:
                 stats.errors += 1
-            
+
             # Log progress
-            logger.info(
-                f"  Result: {'✓ Success' if result.success else '○ Skipped' if result.skipped else '✗ Error'} "
-                f"({result.processing_time:.1f}s)"
-            )
-        
+            if result.success:
+                outcome = "✓ Success"
+            elif result.skipped:
+                outcome = "○ Skipped"
+            else:
+                outcome = "✗ Error"
+            logger.info(f"  Result: {outcome} ({result.processing_time:.1f}s)")
+
         stats.total_time = time.time() - start_time
-        
+
         logger.info(
             f"Album processing complete: {stats.processed} processed, "
             f"{stats.skipped} skipped, {stats.errors} errors "
             f"(Total time: {stats.total_time:.1f}s)"
         )
-        
+
         return stats
-    
+
     def process_image(
-        self,
-        image: AlbumImage,
-        album: Album,
-        force_reprocess: bool = False
+        self, image: AlbumImage, album: Album, force_reprocess: bool = False
     ) -> ProcessingResult:
         """Process a single image.
-        
+
+        Runs the full pipeline: marker-tag skip, download/cache, GPS resolution
+        (SmugMug API first, EXIF second), face recognition, caption/tag generation and
+        the SmugMug write (skipped in dry-run mode). Generation uses one combined
+        inference call unless vision.single_call is false.
+
         Args:
             image: AlbumImage to process
             album: Parent album
             force_reprocess: If True, process even if already marked
-            
+
         Returns:
             ProcessingResult
         """
         start_time = time.time()
+        existing_keywords = self._split_keywords(image.keywords)
         result = ProcessingResult(
             image_key=image.image_key,
             filename=image.file_name,
             success=False,
             current_caption=image.caption,
-            current_keywords=list(image.keywords) if image.keywords else [],
+            current_keywords=existing_keywords,
         )
-        
+
         try:
             # Check if already processed
             marker_tag = self.config.get("processing.marker_tag", "smugvision")
-            if not force_reprocess and image.has_marker_tag(marker_tag):
+            if not force_reprocess and self._has_marker_tag(image, marker_tag):
                 logger.debug(f"Image {image.file_name} already has marker tag, skipping")
                 result.skipped = True
                 result.processing_time = time.time() - start_time
                 return result
-            
+
             # Download image to cache
             logger.debug(f"Downloading image: {image.file_name}")
             image_path = self._download_image(image, album)
-            
+
             # If download returned None, image is already cached - build path
             if not image_path:
                 album_cache_dir = self.cache.get_album_cache_dir(
-                    album_name=album.name,
-                    folder_path=None
+                    album_name=album.name, folder_path=None
                 )
                 image_path = album_cache_dir / image.file_name
-            
+
             if not image_path.exists():
                 raise ValueError(f"Failed to download image: {image.file_name}")
-            
+
             # Get GPS coordinates - prefer SmugMug API data over EXIF from downloaded file
             # (SmugMug strips GPS from downloaded images for privacy, but provides it via API)
             latitude = None
             longitude = None
             gps_source = None
             exif_location = None
-            
+
             if image.has_gps:
                 # Use GPS data from SmugMug API
                 latitude = image.latitude
@@ -353,29 +400,27 @@ class ImageProcessor:
                     longitude = exif_location.longitude
                     gps_source = "EXIF"
                     logger.debug(f"  GPS from EXIF: {latitude:.6f}, {longitude:.6f}")
-            
+
             # Get location string with custom locations and reverse geocoding
             location_string = None
             location_aliases = []
             is_custom = False
-            
+
             if latitude is not None and longitude is not None:
-                logger.info(
-                    f"  GPS coordinates ({gps_source}): {latitude:.6f}, {longitude:.6f}"
-                )
+                logger.info(f"  GPS coordinates ({gps_source}): {latitude:.6f}, {longitude:.6f}")
                 if self.config.get("processing.use_exif_location", True):
                     # Use the new unified location resolution
                     check_custom = self.config.get("location.check_custom_first", True)
                     custom_file = self.config.get("location.custom_locations_file")
-                    
+
                     location_string, location_aliases, is_custom = resolve_location_with_custom(
                         latitude,
                         longitude,
                         check_custom_first=check_custom,
                         custom_locations_file=custom_file,
-                        interactive=False
+                        interactive=False,
                     )
-                    
+
                     if is_custom:
                         logger.info(f"  Location (custom): {location_string}")
                         if location_aliases:
@@ -386,109 +431,152 @@ class ImageProcessor:
                         logger.info("  Location: Could not resolve location name")
             else:
                 logger.debug("  No GPS coordinates available")
-            
+
             # Create exif_location object for downstream use (for location tags extraction)
             if exif_location is None:
                 # We got GPS from SmugMug API, create a minimal ExifLocation object
                 from ..utils.exif import ExifLocation
+
                 exif_location = ExifLocation(
                     latitude=latitude,
                     longitude=longitude,
-                    has_coordinates=(latitude is not None and longitude is not None)
+                    has_coordinates=(latitude is not None and longitude is not None),
                 )
-            
+
             # Update with resolved location data
             exif_location.location_name = location_string
             exif_location.location_aliases = location_aliases
             exif_location.is_custom_location = is_custom
-            
-            # Detect and identify faces
-            person_names = []
+
+            # Detect and identify faces.
+            # raw_names keep the reference-folder spelling ("John_Doe") because that is
+            # what relationships.yaml is keyed on; person_names is the display form.
+            raw_names: List[str] = []
+            person_names: List[str] = []
+            total_faces = 0
             if self.face_recognizer:
                 logger.debug("Detecting faces")
-                raw_names = self.face_recognizer.get_person_names(str(image_path))
+                min_confidence = self.config.get("face_recognition.min_confidence", 0.25)
+                raw_names = self.face_recognizer.get_person_names(
+                    str(image_path), min_confidence=min_confidence
+                )
+                # Total faces DETECTED, which can exceed the number recognized. The
+                # recognizer memoizes detection per file, so this reuses the pass
+                # get_person_names() just made instead of detecting a second time.
+                total_faces = self._count_detected_faces(str(image_path), len(raw_names))
                 # Format names: replace underscores with spaces
-                person_names = [name.replace('_', ' ') for name in raw_names]
-                result.faces_detected = len(person_names)
+                person_names = [name.replace("_", " ") for name in raw_names]
+                result.faces_detected = total_faces
                 if person_names:
-                    logger.info(f"  Identified: {', '.join(person_names)}")
-            
-            # Generate caption
-            logger.debug("Generating caption")
-            caption_prompt = self._build_caption_prompt(
-                location=location_string,
-                person_names=person_names,
-                album_name=album.name
-            )
-            ai_caption = self.vision.generate_caption(
-                image_path=str(image_path),
-                prompt=caption_prompt,
-                temperature=self.vision_temperature,
-                max_tokens=self.vision_max_tokens
-            )
-            
-            # Generate tags
-            logger.debug("Generating tags")
-            tags_prompt = self._build_tags_prompt(
-                location=location_string,
-                person_names=person_names,
-                album_name=album.name
-            )
-            ai_tags = self.vision.generate_tags(
-                image_path=str(image_path),
-                prompt=tags_prompt,
-                temperature=self.vision_temperature,
-                max_tokens=self.vision_max_tokens
-            )
-            
+                    logger.info(
+                        f"  Identified {len(person_names)} of {total_faces} face(s): "
+                        f"{', '.join(person_names)}"
+                    )
+                elif total_faces:
+                    logger.info(f"  Detected {total_faces} face(s), none identified")
+
+            # Generate caption and tags
+            caption_instruction = self.config.get("prompts.caption", DEFAULT_CAPTION_PROMPT)
+            tags_instruction = self.config.get("prompts.tags", DEFAULT_TAGS_PROMPT)
+
+            if self._use_single_call():
+                # One prompt, one image encode, one inference call. Context (album,
+                # location, people, relationships.yaml) is injected by the vision layer
+                # so it is not also baked into the prompt text here.
+                logger.debug("Generating caption and tags in a single call")
+                metadata = self.vision.generate_metadata(
+                    str(image_path),
+                    caption_instruction,
+                    tags_instruction,
+                    temperature=self.vision_temperature,
+                    max_tokens=self.vision_max_tokens,
+                    location_context=location_string,
+                    person_names=raw_names,
+                    total_faces=total_faces if self.face_recognizer else None,
+                    album_name=album.name,
+                )
+                ai_caption = metadata.caption
+                ai_tags = list(metadata.tags)
+            else:
+                # Legacy two-call path (vision.single_call = false). Context is embedded
+                # in the prompt text here, as it always was.
+                logger.debug("Generating caption")
+                caption_prompt = self._build_caption_prompt(
+                    location=location_string, person_names=person_names, album_name=album.name
+                )
+                ai_caption = self.vision.generate_caption(
+                    image_path=str(image_path),
+                    prompt=caption_prompt,
+                    temperature=self.vision_temperature,
+                    max_tokens=self.vision_max_tokens,
+                )
+
+                logger.debug("Generating tags")
+                tags_prompt = self._build_tags_prompt(
+                    location=location_string, person_names=person_names, album_name=album.name
+                )
+                ai_tags = self.vision.generate_tags(
+                    image_path=str(image_path),
+                    prompt=tags_prompt,
+                    temperature=self.vision_temperature,
+                    max_tokens=self.vision_max_tokens,
+                )
+
             # Format metadata
             final_caption = self.formatter.format_caption(
                 ai_caption=ai_caption,
                 existing_caption=image.caption,
                 location=location_string,
-                person_names=person_names
+                person_names=person_names,
             )
-            
+
             # Extract location tags, including aliases from custom locations
-            location_tags = self._extract_location_tags(exif_location) if exif_location.has_coordinates else None
-            
+            location_tags = (
+                self._extract_location_tags(exif_location)
+                if exif_location.has_coordinates
+                else None
+            )
+
             # Add location aliases as tags if configured
             if self.config.get("location.use_aliases_as_tags", True) and location_aliases:
                 if location_tags is None:
                     location_tags = []
                 location_tags.extend(location_aliases)
-            
+
             final_tags = self.formatter.format_tags(
                 ai_tags=ai_tags,
-                existing_tags=image.keywords,
+                existing_tags=existing_keywords,
                 person_names=person_names,
-                location_tags=location_tags
+                location_tags=location_tags,
             )
-            
+
             # Store the generated metadata in the result for inspection/UI
             result.proposed_caption = final_caption
             result.proposed_keywords = final_tags
             result.detected_faces = person_names
             result.location = location_string
             result.location_aliases = location_aliases
-            
-            # Update SmugMug
+
+            # Update SmugMug. update_image_metadata() takes the caption and the keyword
+            # LIST as keyword arguments and builds the PATCH body itself (it joins the
+            # keywords into the comma-separated string the API expects). Passing None
+            # leaves a field untouched, so an empty caption never clears an existing one.
             if not self.dry_run:
                 logger.debug("Updating SmugMug")
-                payload = self.formatter.create_update_payload(
-                    caption=final_caption,
-                    tags=final_tags
+                self.smugmug.update_image_metadata(
+                    image_key=image.image_key,
+                    caption=final_caption or None,
+                    keywords=final_tags or None,
                 )
-                self.smugmug.update_image_metadata(image.image_key, payload)
             else:
                 logger.info("  [DRY RUN] Would update with:")
                 logger.info(f"    Caption: {final_caption}")
                 logger.info(f"    Tags ({len(final_tags)}): {', '.join(final_tags)}")
-            
+
             result.success = True
             result.caption_generated = bool(ai_caption)
             result.tags_generated = len(ai_tags) if ai_tags else 0
-            
+
         except Exception as e:
             logger.error(f"Error processing {image.file_name}: {e}", exc_info=True)
             result.error = str(e)
@@ -496,64 +584,132 @@ class ImageProcessor:
             # Force garbage collection after each image to keep memory usage low
             # This is important because image processing creates large temporary objects
             gc.collect()
-        
+
         result.processing_time = time.time() - start_time
         return result
-    
+
+    @staticmethod
+    def _split_keywords(keywords: Optional[List[str]]) -> List[str]:
+        """Split SmugMug keyword strings into individual tags.
+
+        SmugMug stores keywords as one string and hands it back SEMICOLON separated
+        ("dog; park; smugvision") even when it was written comma separated, but
+        AlbumImage.from_api_response only splits on commas. A previously written tag
+        list therefore arrives as a single blob, which hides the marker tag and
+        defeats deduplication. Splitting on both separators recovers the real tags.
+
+        Args:
+            keywords: Keyword values as parsed from the SmugMug API (may be None)
+
+        Returns:
+            List of individual, non-empty tags in their original order
+        """
+        if not keywords:
+            return []
+
+        split_tags: List[str] = []
+        for keyword in keywords:
+            for part in re.split(r"[;,]", str(keyword)):
+                part = part.strip()
+                if part:
+                    split_tags.append(part)
+        return split_tags
+
+    def _has_marker_tag(self, image: AlbumImage, marker_tag: str) -> bool:
+        """Check whether an image already carries the processing marker tag.
+
+        Falls back to a separator-aware check because SmugMug returns keywords as a
+        semicolon-separated blob, which makes AlbumImage.has_marker_tag() miss the
+        marker on every image smugVision has already processed. This only ever turns a
+        missed marker into a detected one, so it can add skips but never remove them.
+
+        Args:
+            image: AlbumImage to inspect
+            marker_tag: Marker tag configured in processing.marker_tag
+
+        Returns:
+            True if the marker tag is present in the image's keywords
+        """
+        if image.has_marker_tag(marker_tag):
+            return True
+        target = marker_tag.strip().lower()
+        return any(tag.lower() == target for tag in self._split_keywords(image.keywords))
+
+    def _count_detected_faces(self, image_path: str, recognized_count: int) -> int:
+        """Count the faces detected in an image, including unrecognized ones.
+
+        FaceRecognizer memoizes its most recent detection, so calling this straight
+        after get_person_names() on the same file reuses that pass rather than running
+        detection again.
+
+        Args:
+            image_path: Path to the image that was just analyzed
+            recognized_count: Number of people recognized, used as a floor if the
+                recognizer cannot report a detected count
+
+        Returns:
+            Number of faces detected, never less than recognized_count
+        """
+        if not self.face_recognizer:
+            return 0
+        try:
+            detected = int(self.face_recognizer.get_face_count(image_path))
+        except Exception as e:
+            logger.debug(f"Could not determine detected face count: {e}")
+            return recognized_count
+        return max(detected, recognized_count)
+
     def _download_image(self, image: AlbumImage, album: Album) -> Optional[Path]:
         """Download image to cache.
-        
+
         Args:
             image: AlbumImage to download
             album: Parent album
-            
+
         Returns:
             Path to cached image or None if failed
         """
         try:
             # Get album cache directory
             album_cache_dir = self.cache.get_album_cache_dir(
-                album_name=album.name,
-                folder_path=None  # Could extract from album path in future
+                album_name=album.name, folder_path=None  # Could extract from album path in future
             )
-            
+
             # Download using SmugMug client
             size = self.config.get("processing.image_size", "Medium")
             path = self.smugmug.download_image(
-                image=image,
-                destination=str(album_cache_dir),
-                size=size,
-                skip_if_exists=True
+                image=image, destination=str(album_cache_dir), size=size, skip_if_exists=True
             )
-            
+
             return path
         except Exception as e:
             logger.error(f"Failed to download {image.file_name}: {e}")
             return None
-    
+
     def _build_caption_prompt(
         self,
         location: Optional[str] = None,
         person_names: Optional[List[str]] = None,
-        album_name: Optional[str] = None
+        album_name: Optional[str] = None,
     ) -> str:
-        """Build caption prompt with context.
-        
+        """Build caption prompt with context - legacy two-call path only.
+
+        Used when vision.single_call is false. The single-call path passes the raw
+        prompts.caption text plus the context as arguments and lets the vision layer
+        inject it, so context is never added twice.
+
         Args:
             location: Location string from EXIF
-            person_names: Identified person names
+            person_names: Identified person names (display form, underscores removed)
             album_name: Name of the album this image belongs to
-            
+
         Returns:
             Enhanced prompt string
         """
-        base_prompt = self.config.get(
-            "prompts.caption",
-            "Analyze this image and provide a concise, descriptive caption."
-        )
-        
+        base_prompt = self.config.get("prompts.caption", DEFAULT_CAPTION_PROMPT)
+
         context_parts = []
-        
+
         if album_name:
             context_parts.append(
                 f"Album name: {album_name}\n"
@@ -561,81 +717,82 @@ class ImageProcessor:
                 f"e.g., pet names, birthdays, trips, celebrations. Use this context "
                 f"to inform your caption.)"
             )
-        
+
         if location:
             context_parts.append(f"Location: {location}")
-        
+
         if person_names:
             names_str = ", ".join(person_names)
             context_parts.append(f"People identified: {names_str}")
-        
+
         if context_parts:
             context = "\n".join(context_parts)
             return f"{base_prompt}\n\nContext:\n{context}"
-        
+
         return base_prompt
-    
+
     def _build_tags_prompt(
         self,
         location: Optional[str] = None,
         person_names: Optional[List[str]] = None,
-        album_name: Optional[str] = None
+        album_name: Optional[str] = None,
     ) -> str:
-        """Build tags prompt with context.
-        
+        """Build tags prompt with context - legacy two-call path only.
+
+        Used when vision.single_call is false. The single-call path passes the raw
+        prompts.tags text plus the context as arguments and lets the vision layer
+        inject it, so context is never added twice.
+
         Args:
             location: Location string from EXIF
-            person_names: Identified person names
+            person_names: Identified person names (display form, underscores removed)
             album_name: Name of the album this image belongs to
-            
+
         Returns:
             Enhanced prompt string
         """
-        base_prompt = self.config.get(
-            "prompts.tags",
-            "Generate 5-10 relevant keyword tags for this image."
-        )
-        
+        base_prompt = self.config.get("prompts.tags", DEFAULT_TAGS_PROMPT)
+
         context_parts = []
-        
+
         if album_name:
             context_parts.append(
-                f"Album: {album_name} (may contain event/occasion info like pet names, birthdays, trips)"
+                f"Album: {album_name} (may contain event/occasion info like pet names, "
+                f"birthdays, trips)"
             )
-        
+
         if location:
             context_parts.append(f"Location: {location}")
-        
+
         if person_names:
             context_parts.append(f"People: {', '.join(person_names)}")
-        
+
         if context_parts:
             context = " | ".join(context_parts)
             return f"{base_prompt}\n\nContext: {context}"
-        
+
         return base_prompt
-    
+
     def _extract_location_tags(self, exif_location) -> Optional[List[str]]:
         """Extract location-based tags from EXIF location data.
-        
+
         Args:
             exif_location: ExifLocation object with location data
-            
+
         Returns:
             List of location tags or None
         """
         tags = []
-        
+
         # Extract location components from the location_name string if available
         # For now, just add the full location name as a tag
         # In the future, could parse location_name to extract city, state, etc.
         if exif_location.location_name:
             # Split on common separators and add significant parts as tags
-            parts = exif_location.location_name.replace(',', '|').split('|')
+            parts = exif_location.location_name.replace(",", "|").split("|")
             for part in parts:
                 part = part.strip()
                 if part and len(part) > 2:  # Skip very short parts
                     tags.append(part)
-        
-        return tags if tags else None
 
+        return tags if tags else None
