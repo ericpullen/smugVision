@@ -115,6 +115,7 @@ class ImageProcessor:
         cache_manager: Optional[CacheManager] = None,
         face_recognizer: Optional[FaceRecognizer] = None,
         dry_run: bool = False,
+        preserve_existing: Optional[bool] = None,
     ) -> None:
         """Initialize image processor.
 
@@ -125,6 +126,10 @@ class ImageProcessor:
             cache_manager: Cache manager (created if not provided)
             face_recognizer: Face recognizer (created if not provided)
             dry_run: If True, don't update SmugMug
+            preserve_existing: Overrides ``processing.preserve_existing`` for this run.
+                ``None`` (the default) uses the configured value. ``False`` replaces the
+                existing caption and keywords instead of merging into them, which
+                discards anything already on the image.
         """
         self.config = config
         self.dry_run = dry_run
@@ -234,9 +239,19 @@ class ImageProcessor:
                 except Exception as e:
                     logger.warning(f"Could not initialize face recognizer: {e}")
 
-        # Initialize metadata formatter
+        # Initialize metadata formatter. An explicit preserve_existing argument (from
+        # --preserve-existing / --no-preserve-existing) overrides the configured value
+        # for this run only; None means "whatever the config says".
+        if preserve_existing is None:
+            self.preserve_existing = bool(config.get("processing.preserve_existing", True))
+        else:
+            self.preserve_existing = bool(preserve_existing)
+            logger.info(
+                f"processing.preserve_existing overridden for this run: "
+                f"{self.preserve_existing}"
+            )
         self.formatter = MetadataFormatter(
-            preserve_existing=config.get("processing.preserve_existing", True),
+            preserve_existing=self.preserve_existing,
             marker_tag=config.get("processing.marker_tag", "smugvision"),
         )
 
