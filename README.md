@@ -12,9 +12,10 @@ Automatically generate descriptive captions and relevant tags for your SmugMug p
 ## Features
 
 ✨ **AI-Powered Metadata Generation**
-- Generate descriptive captions using local Llama 3.2 Vision model
+- Generate descriptive captions using a local Ollama vision model of your choice
 - Create relevant keyword tags automatically
 - Context-aware prompts with location and person information
+- Caption and tags come back from a **single structured request** per image
 
 👤 **Face Recognition**
 - Identify people in photos automatically
@@ -51,7 +52,7 @@ Automatically generate descriptive captions and relevant tags for your SmugMug p
 ### Prerequisites
 
 - Python 3.9 or higher
-- [Ollama](https://ollama.ai/) with `llama3.2-vision` model
+- [Ollama](https://ollama.ai/) with any vision-capable model installed
 - SmugMug account with API credentials
 
 ### Installation
@@ -78,19 +79,37 @@ pip install -r requirements.txt
 
 #### Install the Vision Model
 
+smugVision drives whatever vision model you point it at — there is no allow-list in
+the code, so any vision-capable model Ollama serves will work. The shipped default is
+in `smugvision/config/defaults.py` under `vision.model`.
+
 ```bash
-ollama pull llama3.2-vision
+ollama list                              # what you already have
+ollama pull <model>                      # e.g. the value of vision.model in your config
 ```
+
+Then set `vision.model` in `~/.smugvision/config.yaml` to the name Ollama reports.
+With `vision.validate_model: true` (the default) smugVision logs a warning at startup
+if the configured model is not in Ollama's tag list — it warns, it never hard-fails.
+
+#### Optional: alternative face recognition backend
+
+The default face recognition backend is dlib (`face-recognition`), installed with the
+core dependencies. An **optional, experimental** InsightFace/ArcFace backend is also
+available:
+
+```bash
+pip install -e ".[insightface]"
+```
+
+Then set `face_recognition.backend: "insightface"` in your config. See
+[`README_FACE_RECOGNITION.md`](README_FACE_RECOGNITION.md) for the caveats.
 
 ### Initial Configuration
 
 Run the interactive configuration setup:
 ```bash
-# If installed via pip:
 smugvision-config
-
-# Or using Python module:
-python -m smugvision.config.manager --setup
 ```
 
 This will create `~/.smugvision/config.yaml` and prompt you for:
@@ -190,22 +209,50 @@ smugmug:
 ### Vision Model Settings
 ```yaml
 vision:
-  model: "llama3.2-vision"
-  endpoint: "http://localhost:11434"
+  model: "qwen3-vl:8b"        # any vision model from `ollama list`
+  endpoint: null              # null = use $OLLAMA_HOST, else http://localhost:11434
   temperature: 0.7
-  max_tokens: 150
+  max_tokens: 500             # budget for ONE reply holding caption + tags
+  timeout: 120
+  think: false                # false | "low" | "medium" | "high" | null
+  keep_alive: "30m"           # keep the model resident between images
+  single_call: true           # one request per image for caption + tags
+  structured_output: true     # constrain the reply with a JSON schema
+  max_image_dimension: 1568   # downscale long edge before upload; 0/null disables
+  jpeg_quality: 85
+  validate_model: true        # warn (never fail) if the model is not installed
 ```
+
+`max_tokens` is a single budget covering the caption *and* the tags, because they now
+come back in one reply. If replies come back empty or truncated on a reasoning model,
+the lever is `think` (keep it `false`), not just a bigger `max_tokens` — a reasoning
+model with `think` enabled can spend the whole budget before emitting any content.
+
+Set `single_call: false` or `structured_output: false` to fall back to the legacy
+two-request / free-text paths. Both remain fully functional and exist for models that
+handle JSON schemas badly; they are compatibility fallbacks, not neutral options.
 
 ### Face Recognition
 ```yaml
 face_recognition:
   enabled: true
   reference_faces_dir: "~/.smugvision/reference_faces"
-  tolerance: 0.6
-  model: "hog"
-  detection_scale: 0.5
-  min_confidence: 0.25
+  backend: "dlib"             # "dlib" (default) | "insightface" (optional, experimental)
+  tolerance: 0.6              # dlib only
+  model: "cnn"                # dlib DETECTOR ('hog'/'cnn'), not the backend selector
+  detection_scale: 0.5        # dlib only
+  min_confidence: 0.25        # backend-agnostic, normalized 0.0-1.0
+  use_cache: true
+  cache_dir: "~/.smugvision/cache/face_encodings"
+  insightface:                # only used when backend: "insightface"
+    model_name: "buffalo_l"
+    det_size: [640, 640]
+    similarity_threshold: 0.4 # cosine similarity - HIGHER is stricter
 ```
+
+Note that `model` is the dlib **detector** (`hog` or `cnn`); the backend is chosen by
+`backend`. `tolerance` and `similarity_threshold` are different metrics pointing in
+opposite directions and are not interchangeable.
 
 ### Processing Options
 ```yaml
@@ -215,9 +262,12 @@ processing:
   preserve_existing: true
   marker_tag: "smugvision"
   image_size: "Medium"
-  skip_videos: true
   use_exif_location: true
 ```
+
+> `generate_captions` and `generate_tags` are present in the default config but are
+> not currently read by `ImageProcessor` — it always produces both. Setting them to
+> `false` has no effect today.
 
 ### Caching
 ```yaml
@@ -277,7 +327,8 @@ For a complete configuration example, see [`config.yaml.example`](config.yaml.ex
 4. **Location Lookup**: Reverse geocodes coordinates to human-readable location names
 5. **Face Recognition**: Detects and identifies known people in photos
 6. **Context Building**: Combines location, people, and EXIF data into context
-7. **AI Generation**: Sends images with context to Llama 3.2 Vision for captions and tags
+7. **AI Generation**: Sends the image once, with all of that context, in a single
+   structured request that returns the caption and the tags together
 8. **Metadata Formatting**: Combines AI-generated metadata with extracted context
 9. **SmugMug Update**: Patches image metadata via SmugMug API
 10. **Progress Tracking**: Reports statistics and any errors
@@ -293,7 +344,9 @@ smugVision can extract GPS coordinates from EXIF data and convert them to readab
 - **Geocoding Provider**: Uses Nominatim (OpenStreetMap) by default
 - **Custom User Agent**: Configure in `~/.smugvision/geocoding_config.yaml`
 - **Rate Limiting**: Respects Nominatim's usage policy (1 request/second)
-- **Caching**: Location lookups are cached to minimize API calls
+- **Caching**: not implemented on the live path — the same coordinates are reverse
+  geocoded once per photo (see `TIMING_ANALYSIS.md`). `~/.smugvision/locations.yaml`
+  is the way to skip lookups for places you shoot often.
 
 ### Relationship Context
 
@@ -368,7 +421,8 @@ This installs additional tools for testing and development:
 ### "Ollama not responding"
 - Ensure Ollama is running: `ollama serve`
 - Verify model is installed: `ollama list`
-- Check endpoint in config: `vision.endpoint`
+- Check endpoint in config: `vision.endpoint`. Leave it unset (null) to use `$OLLAMA_HOST`;
+  setting it overrides the environment variable.
 
 ### "SmugMug authentication failed"
 - Verify API credentials in `~/.smugvision/config.yaml`
@@ -436,8 +490,9 @@ For detailed architecture documentation, see [`DESIGN.md`](DESIGN.md).
 See [`DESIGN.md`](DESIGN.md) for detailed roadmap. Planned features include:
 
 - [ ] Batch folder processing
-- [ ] Web UI for monitoring and control
-- [ ] Multiple vision model support (GPT-4V, Claude Vision)
+- [x] Web UI for monitoring and control (`smugvision-web`)
+- [x] Any Ollama vision model (no code change needed to switch models)
+- [ ] Non-Ollama vision backends (GPT-4V, Claude Vision)
 - [ ] Smart duplicate detection
 - [ ] Custom metadata templates
 - [ ] Integration with other photo services
@@ -465,9 +520,9 @@ This project is licensed under the MIT License - see the [`LICENSE`](LICENSE) fi
 
 ## Acknowledgments
 
-- **[Ollama](https://ollama.ai/)**: Local LLM runtime
-- **[Meta's Llama](https://ai.meta.com/llama/)**: Vision model
-- **[face_recognition](https://github.com/ageitgey/face_recognition)**: Face detection library
+- **[Ollama](https://ollama.ai/)**: Local LLM runtime and the vision models it serves
+- **[face_recognition](https://github.com/ageitgey/face_recognition)**: Face detection library (default backend)
+- **[InsightFace](https://github.com/deepinsight/insightface)**: Optional alternative face recognition backend
 - **[SmugMug API](https://api.smugmug.com/)**: Photo hosting platform
 - **[Nominatim](https://nominatim.org/)**: Geocoding service
 

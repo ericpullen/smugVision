@@ -1,124 +1,159 @@
 # SmugVision Performance Analysis
 
-## Summary
+This file holds two things:
 
-Based on the log output analysis, here's where time is being spent during image processing:
+1. **[Current numbers](#current-numbers-2026-08-11)** — measurements taken after the
+   single-structured-call rewrite of the vision layer.
+2. **[Original investigation](#original-investigation-historical)** — the earlier
+   analysis that identified reverse geocoding as the dominant cost. Its recommendations
+   have since shipped; it is kept for context, not as a to-do list.
+
+---
+
+## Current numbers (2026-08-11)
+
+### How these were measured — read before quoting them
+
+- Model: **`gemma4:latest`** (the e4b variant) on Ollama 0.32.9, local, Apple Silicon.
+- Images: real cached originals from `~/.smugvision/cache/`, e.g. a 3840x2880 / 8.12 MB JPEG.
+- These are **vision-inference timings only**. They do not include download, geocoding,
+  or face recognition.
+- The historical 18s + 6s figures below were taken on a **different model** on a
+  **different machine state**. The old and new numbers are therefore *not* a controlled
+  A/B of one-call vs two-call — the honest claim is "one structured call on this model
+  costs ~2-3s", not "the rewrite made inference 8x faster".
+
+### Vision inference per image
+
+| Configuration | Measured (warm) | Notes |
+|---|---|---|
+| `single_call: true`, `structured_output: true` (default) | **1.76 – 2.77s** | One image encode, one `chat` call, JSON-Schema constrained |
+| `single_call: true`, `structured_output: false` | 2.26s warm; **22.7s** on one cold run | Unconstrained free text rambles toward `num_predict` |
+| `single_call: false`, `structured_output: true` | 3.24 – 3.31s | Two requests, two encodes |
+| `single_call: false`, `structured_output: false` | 3.25 – 4.00s | Fully legacy path |
+| Legacy processor call shape (`generate_caption` then `generate_tags`, `max_tokens=500`) | 3.74s | Same model, for comparison against the row above |
+
+A direct probe of the raw `chat` call measured **9.57s on the first (cold) request** for a
+new image, then **1.21 – 1.26s** on repeats (`eval_count` 50-61, `done_reason=stop`).
+That cold/warm gap is what `vision.keep_alive` addresses: without it Ollama can unload
+the model between images, so every image pays the cold cost rather than just the first.
+
+Independent single-call measurement by a second observer on the same setup: **2.9s** for
+caption + tags in one structured request.
+
+### `think` (reasoning) settings
+
+| `vision.think` | Result |
+|---|---|
+| `false` (default) | 1.80s |
+| `"low"` | 9.14s, and **only with `max_tokens: 1200`** — at 400 tokens the model spent the entire budget reasoning and returned no content |
+| `null` (omitted) | 4.64s — gemma4 reasons by default |
+
+This is why `vision.think: false` is the shipped default, and why "raise `max_tokens`" is
+the wrong first move when replies come back empty.
+
+### Image downscaling (`vision.max_image_dimension`)
+
+Same 3840x2880 source JPEG, base64 payload size:
+
+| Setting | Payload |
+|---|---|
+| disabled (`0` / `null`) | 5.59 MB |
+| `1568` (default) | 1.07 MB (**5.2x smaller**) |
+| `800` | 0.27 MB |
+
+Vision models tile input to roughly 1024-1568px, so the extra pixels were being paid for
+and then discarded. `max_dimension` never upscales.
+
+### Face recognition (dlib backend, 309 reference images across 12 people)
+
+| Operation | Measured |
+|---|---|
+| Reference encoding, cold (cache rebuild) | 21.7s |
+| Reference load from warm cache | 0.01s |
+| Repeat detection on the same image (memoized) | 0.43s → ~0.000s |
+
+The memo matters because `get_person_names()` and `get_face_count()` used to run full
+detection independently on the same image.
+
+**InsightFace backend (optional, experimental):** constructing the recognizer with a warm
+cache measured **4.3 – 4.6s** versus 0.01s for dlib, because 7 reference images have no
+detectable face, are not recorded in the manifest, and are retried every run — which forces
+full ONNX session initialization. Accuracy was *not* benchmarked; see
+`README_FACE_RECOGNITION.md`.
+
+### What has not been measured
+
+- End-to-end `smugvision --gallery <key> --dry-run` wall-clock after these changes.
+- Any model other than `gemma4:latest`.
+- InsightFace vs dlib recognition accuracy.
+
+Do not extrapolate a total-per-image figure from the table above; the download and
+geocoding phases dominate and have not been re-measured since the original investigation.
+
+---
+
+## Original investigation (historical)
+
+> Kept for context. The reverse-geocoding rewrite described under "Recommendations"
+> has since shipped — `resolve_location_with_custom()` now checks
+> `~/.smugvision/locations.yaml` first and falls back to Nominatim plus a single
+> Overpass POI lookup. The line references below point at code that has changed and
+> have not been re-verified.
+
+Based on the log output analysis, here's where time was being spent during image processing:
 
 ### Timing Breakdown (from logs)
 
 | Phase | Duration | Percentage | Issue |
 |-------|----------|------------|-------|
-| **GPS Reverse Geocoding #1** | ~47s | 35% | ⚠️ MAJOR BOTTLENECK |
+| **GPS Reverse Geocoding #1** | ~47s | 35% | ⚠️ MAJOR BOTTLENECK (since fixed) |
 | User venue selection (interactive) | ~28s | 21% | Expected (user input) |
 | Face detection | ~6s | 4.5% | Reasonable |
-| **GPS Reverse Geocoding #2** | ~47s | 35% | ⚠️ MAJOR BOTTLENECK |
-| Caption generation (Llama) | ~18s | 13% | Expected (LLM inference) |
-| Tags generation (Llama) | ~6s | 4.5% | Expected (LLM inference) |
+| **GPS Reverse Geocoding #2** | ~47s | 35% | ⚠️ MAJOR BOTTLENECK (since fixed) |
+| Caption generation | ~18s | 13% | Superseded — see [Current numbers](#current-numbers-2026-08-11) |
+| Tags generation | ~6s | 4.5% | Superseded — caption and tags are now one call |
 | Face recognizer init | ~1s | <1% | Reasonable |
 | Model initialization | <1s | <1% | Reasonable |
 
 **Total Processing Time: ~153s (2.5 minutes)**
 **Actual Processing (excluding user input): ~125s**
 
-## Root Cause Analysis
+### 🔴 Critical Issue: Reverse Geocoding Taking 47 Seconds — RESOLVED
 
-### 🔴 Critical Issue: Reverse Geocoding Taking 47 Seconds
+**Location:** `smugvision/utils/exif.py` (line numbers from the original analysis no
+longer apply)
 
-**Location:** `smugvision/utils/exif.py`, lines 390-426
+**Problem:** the `reverse_geocode()` function iterated through ~40 different venue types,
+making a separate Nominatim call for each with a 5-second timeout. Half the list being
+tried meant 20+ calls × 5s = 100s+.
 
-**Problem:** The `reverse_geocode()` function has a **catastrophically inefficient implementation**:
+**Resolution:** replaced by a single reverse geocode plus one Overpass POI query, with
+`~/.smugvision/locations.yaml` short-circuiting known places entirely
+(`location.check_custom_first`). The post-fix wall-clock has not been re-measured.
 
-1. It iterates through **~40 different venue types** (restaurant, cafe, theater, school, etc.)
-2. For **each venue type**, it makes a separate API call to Nominatim geocoding service
-3. Each API call has a **5-second timeout**
-4. If even half the venue types are tried, that's **20+ API calls × 5 seconds = 100+ seconds potential**
+### Original recommendations
 
-**Code snippet causing the issue:**
+1. Use a single Overpass/Nominatim query instead of per-venue-type searches — **shipped**
+2. Cache results so the same coordinates are not resolved twice — **not done**. The only
+   `_geocode_cache` in the tree is in `smugvision/utils/exif_optimized.py`, which nothing
+   imports. The live path, `utils/exif.py::reverse_geocode()`, builds a fresh `Nominatim`
+   geolocator and reverse-geocodes on **every** call, so an album of N photos shot at one
+   venue still costs N reverse lookups plus N Overpass queries.
+3. Reduce the 5s per-venue timeout — **moot**, the loop is gone
+4. Limit the venue type list — **moot**, the loop is gone
+5. Parallelize with `ThreadPoolExecutor` — **not done**, no longer needed
 
-```python
-# Lines 373-385: Comprehensive venue type list (~40 types)
-all_venue_types = [
-    'restaurant', 'cafe', 'coffee', 'bar', 'pub', 'brewery',
-    'theater', 'theatre', 'cinema', 'venue', 'hall', 'auditorium',
-    'museum', 'gallery', 'library',
-    # ... 40+ types total
-]
-
-# Lines 390-426: Loop making API call for EACH type
-for search_term in all_venue_types:
-    query = f"{search_term} near {latitude},{longitude}"
-    search_results = geolocator.geocode(
-        query,
-        exactly_one=False,
-        limit=5,
-        timeout=5  # 5 seconds per venue type!
-    )
-```
-
-### Why This Happens Twice
-
-1. **First call (in test_vision.py):** Lines 78-86, called with `interactive=True` for user selection
-2. **Second call (in process_image):** Called again inside the vision model processing
-
-## Recommendations
-
-### Immediate Fix (High Priority)
-
-**Option 1: Use Nominatim's nearby search properly**
-Instead of searching for each venue type individually, use a single `reverse()` call with better parameters, or use Overpass API for nearby POI search.
-
-**Option 2: Cache results**
-The function is being called twice with the same coordinates. Cache the result from the first call.
-
-**Option 3: Reduce timeout**
-5 seconds per venue type is excessive. Reduce to 2 seconds.
-
-**Option 4: Limit venue types**
-Don't search all 40 venue types. Search only the most common ones (top 5-10).
-
-**Option 5: Use concurrent requests**
-If multiple searches are needed, use `ThreadPoolExecutor` to parallelize API calls.
-
-### Proposed Optimized Implementation
-
-Replace the sequential venue search with:
-
-1. Single reverse geocode call (already done at line 352)
-2. If building name not found, make a **single** Overpass API query for all POI types within radius
-3. Or use Nominatim's `lookup` endpoint for nearby POIs in one call
-
-### Expected Performance After Fix
-
-- GPS reverse geocoding: **47s → 2-5s** (90-95% reduction)
-- Total processing time: **153s → ~35s** (excluding user input)
-- Interactive mode: **153s → ~63s** (including user input)
+The projected "153s → ~35s" figure from the original analysis was an estimate, never a
+measurement. It should not be quoted as a result.
 
 ## Monitoring
 
-Run the updated `test_vision.py` script which now includes detailed timing breakdowns:
+`tests/test_vision.py` prints a timing breakdown per phase:
 
 ```bash
-./test_vision.py <image_path>
+python tests/test_vision.py <image_path>
 ```
 
-The script will output a timing breakdown showing exactly where time is spent in each phase:
-
-```
-⏱️  TIMING BREAKDOWN
-============================================================
-2. EXIF Location Extraction................... 47.23s (35.2%)
-4. Total Image Processing..................... 53.45s (39.8%)
-3. Face Recognizer Initialization..............  0.54s ( 0.4%)
-1. Model Initialization........................  0.25s ( 0.2%)
-------------------------------------------------------------
-TOTAL.......................................... 134.2s
-============================================================
-```
-
-## Additional Notes
-
-- Llama vision model inference (18s caption + 6s tags) is reasonable for local inference
-- Face detection (6s) is acceptable
-- The 94 seconds spent on GPS geocoding (2 × 47s) represents **70% of non-interactive time**
-- Fixing the reverse geocoding will make the overall process **4× faster**
-
+Note that this script hardcodes a model name; edit it to match your `vision.model` (or
+any name from `ollama list`) before drawing conclusions from it.

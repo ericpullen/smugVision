@@ -59,7 +59,7 @@ Configuration setup complete!
 ======================================================================
 ```
 
-The configuration will be automatically saved to `config.yaml` in the current directory.
+The configuration is saved to `~/.smugvision/config.yaml`.
 
 ## Configuration Sections
 
@@ -77,22 +77,55 @@ smugmug:
 
 ### Vision Model Configuration
 
-Settings for the AI vision model (Llama 3.2 Vision via Ollama):
+Settings for the local vision model served by Ollama. **Any vision-capable model works** —
+there is no allow-list in the code, so switching models is a config change, not a code
+change. Run `ollama list` to see what you have installed.
 
 ```yaml
 vision:
-  model: "llama3.2-vision"           # Model name
-  endpoint: "http://localhost:11434" # Ollama API endpoint
+  model: "qwen3-vl:8b"               # Any model from `ollama list`
+  endpoint: null                     # null = use $OLLAMA_HOST, else localhost:11434
   temperature: 0.7                   # Creativity (0.0 = deterministic, 1.0 = creative)
-  max_tokens: 150                    # Maximum length of generated text
+  max_tokens: 500                    # Budget for ONE reply holding caption + tags
   timeout: 120                       # API timeout in seconds
+  think: false                       # false | "low" | "medium" | "high" | null
+  keep_alive: "30m"                  # Keep the model resident between images
+  single_call: true                  # One request per image for caption + tags
+  structured_output: true            # Constrain the reply with a JSON schema
+  max_image_dimension: 1568          # Downscale long edge before upload; 0/null disables
+  jpeg_quality: 85                   # JPEG quality when re-encoding for transport
+  validate_model: true               # Warn (never fail) if the model is not installed
 ```
 
+The shipped defaults live in `smugvision/config/defaults.py`. Every key you leave out of
+your own `config.yaml` falls back to the default there, so a short config file is fine.
+
 **Tips:**
-- Lower `temperature` (0.3-0.5) for more consistent, factual captions
-- Higher `temperature` (0.7-0.9) for more creative, varied descriptions
-- Increase `max_tokens` if captions are being cut off
-- Increase `timeout` if you're getting timeout errors on slower systems
+
+- **`temperature`** — lower (0.3-0.5) for consistent, factual captions; higher (0.7-0.9)
+  for more varied descriptions.
+- **`max_tokens`** — this is one budget covering the caption *and* the tags, because they
+  now arrive in one reply. If output is being cut off, raise it; but first check `think`.
+- **`think`** — the usual cause of an empty or truncated reply on a reasoning model. With
+  reasoning enabled the model can consume the entire `max_tokens` budget before producing
+  any content. `false` (the default) disables it. `null` omits the parameter and lets the
+  model choose, which is slower.
+- **`keep_alive`** — the usual cause of "the first image of every album is slow". Without
+  it Ollama can unload the model between requests, so each image pays load time.
+- **`single_call`** — `true` sends one request per image. Set it to `false` for the legacy
+  path of a separate caption request and tags request. Worth trying only if a model
+  produces noticeably worse output when asked for both at once.
+- **`structured_output`** — `true` constrains the reply with a JSON schema so it parses
+  deterministically. Set it to `false` for older or smaller models that ignore or mishandle
+  schemas; the reply is then parsed with the legacy free-text heuristics. Treat this as a
+  compatibility fallback, not a neutral choice — unconstrained replies tend to ramble
+  toward `max_tokens` and are slower.
+- **`max_image_dimension`** — vision models tile input to roughly 1024-1568px, so sending
+  a 3840px original is wasted bandwidth. `0` or `null` disables downscaling; images are
+  never upscaled.
+- **`validate_model`** — warns at startup when `model` is missing from Ollama's tag list.
+  It never aborts the run.
+- **`timeout`** — raise it on slower systems. It is applied to the underlying HTTP client.
 
 ### Face Recognition Configuration
 
@@ -102,11 +135,66 @@ Settings for face detection and recognition:
 face_recognition:
   enabled: true                      # Enable/disable face recognition
   reference_faces_dir: "~/.smugvision/reference_faces"
-  tolerance: 0.6                     # Matching strictness (0.0-1.0)
-  model: "cnn"                       # Detection model: 'hog' or 'cnn'
+  backend: "dlib"                    # "dlib" (default) | "insightface" (optional)
+
+  # dlib-only settings
+  tolerance: 0.6                     # Euclidean distance ceiling (lower = stricter)
+  model: "cnn"                       # dlib DETECTOR: 'hog' or 'cnn' - NOT the backend
   detection_scale: 0.5               # Image scale for detection (0.1-1.0)
-  min_confidence: 0.25               # Minimum confidence threshold (0.0-1.0)
+
+  # backend-agnostic
+  min_confidence: 0.25               # Normalized confidence threshold (0.0-1.0)
+  use_cache: true                    # Cache reference encodings between runs
+  cache_dir: "~/.smugvision/cache/face_encodings"
+
+  # insightface-only settings
+  insightface:
+    model_name: "buffalo_l"
+    det_size: [640, 640]
+    similarity_threshold: 0.4        # COSINE similarity - HIGHER is stricter
 ```
+
+**Choosing a backend:**
+
+- `backend: "dlib"` is the default and needs nothing beyond the core install.
+- `backend: "insightface"` (ArcFace via ONNX Runtime) is **optional and experimental**.
+  Install it with `pip install -e ".[insightface]"`. If its dependencies are missing,
+  smugVision logs an error and falls back to dlib rather than failing the run. Its
+  recognition accuracy has not been benchmarked against dlib in this project — only
+  mechanical correctness was verified.
+
+Each backend keeps its own encoding cache file, so switching back and forth does not force
+a re-encode and the two vector formats can never be mixed.
+
+**Which knob belongs to which backend:**
+
+| Key | Applies to | Meaning |
+|---|---|---|
+| `tolerance` | dlib only | Euclidean distance ceiling. **Lower is stricter.** |
+| `model` | dlib only | The *detector* (`hog` = faster, `cnn` = more accurate) |
+| `detection_scale` | dlib only | Pre-detection downscale; InsightFace uses `det_size` instead |
+| `insightface.similarity_threshold` | insightface only | Cosine similarity. **Higher is stricter.** |
+| `min_confidence` | both | Normalized 0.0-1.0 score after the backend's own threshold |
+
+`tolerance` and `similarity_threshold` are different metrics running in opposite
+directions — do not copy a value from one to the other.
+
+> **Known gap:** `ImageProcessor` does not currently forward the top-level `tolerance`,
+> `model` or `detection_scale` values to the recognizer, so the built-in dlib defaults
+> (0.6 / `cnn` / 0.5) apply regardless of what you set there. Until that call site is
+> wired up, put them in a `face_recognition.dlib` sub-block instead, which *is* passed
+> through as backend options:
+>
+> ```yaml
+> face_recognition:
+>   backend: "dlib"
+>   dlib:
+>     tolerance: 0.5
+>     model: "hog"
+>     detection_scale: 0.75
+> ```
+>
+> `min_confidence` is forwarded and does take effect.
 
 **Face Recognition Setup:**
 
@@ -127,12 +215,21 @@ face_recognition:
 3. Use the person's name as the directory name (underscores will be replaced with spaces)
 4. Add multiple clear photos of each person for better accuracy
 
-**Parameter Tuning:**
+**Parameter Tuning (dlib backend):**
 - **tolerance**: Lower values (0.4-0.5) = stricter matching, fewer false positives
 - **tolerance**: Higher values (0.6-0.7) = more lenient, may catch more faces but with more false positives
-- **model**: `cnn` is more accurate but slower, `hog` is faster but less accurate
+- **model**: `cnn` is more accurate but slower, `hog` is faster but less accurate. This is
+  the face *detector*, not the backend — the backend is `backend`.
 - **detection_scale**: Lower values = faster processing but may miss distant faces
-- **min_confidence**: Higher values = only include high-confidence matches in results
+- **min_confidence**: Higher values = only include high-confidence matches in results.
+  This one is backend-agnostic: every backend reports a normalized 0.0-1.0 score where
+  0.0 sits exactly at that backend's own match threshold and 1.0 is a perfect match.
+
+**Parameter Tuning (insightface backend):**
+- **insightface.similarity_threshold**: cosine similarity, higher is stricter. 0.4 is the
+  default; raise it toward 0.5 for fewer false positives.
+- **insightface.det_size**: larger finds smaller/more distant faces at more cost.
+- `tolerance`, `model` and `detection_scale` are ignored by this backend.
 
 ### Processing Configuration
 
@@ -144,31 +241,39 @@ processing:
   generate_captions: true            # Generate image captions
   generate_tags: true                # Generate keyword tags
   preserve_existing: true            # Keep existing metadata
-  image_size: "medium"               # Download size from SmugMug
+  image_size: "Medium"               # Download size from SmugMug (case-insensitive)
   use_exif_location: true            # Extract GPS location from EXIF
 ```
 
 ### Prompt Configuration
 
-Customize how the AI describes your images:
+Customize how the AI describes your images. These are *instructions*, not the whole
+prompt: the album name, resolved location, recognized people, and any relationships from
+`~/.smugvision/relationships.yaml` are appended as context by the vision layer before the
+request goes out. With `single_call: true` both instructions are combined into one prompt.
 
 ```yaml
 prompts:
   caption: |
-    Analyze this image and provide a concise, descriptive caption 
-    (1-2 sentences) that describes the main subject, setting, and 
-    any notable activities or features.
-  
+    You are a photo captioning assistant. Write exactly ONE caption (1-2 sentences)
+    for this image. Describe the main subject, setting, and activity.
+    IMPORTANT: Output ONLY the caption text. No options, no explanations, no
+    introductions like 'Here is...' - just the caption itself.
+
   tags: |
-    Generate 5-10 simple, single-word or short-phrase keyword tags.
-    Focus on main subjects, activities, setting, colors, and mood.
+    Output a comma-separated list of 5-10 keyword tags for this image.
+    IMPORTANT: Output ONLY the tags separated by commas. No explanations,
+    no numbering, no extra text. Example output: dog, playing, park, sunny, happy
 ```
 
+The values above are the shipped defaults (see `smugvision/config/defaults.py`).
+
 **Tips for custom prompts:**
-- Be specific about the format you want (e.g., "1-2 sentences", "comma-separated list")
-- Mention what to focus on (subjects, activities, mood, etc.)
-- Include examples of desired output format
+- Say what to focus on (subjects, activities, mood, etc.)
 - Keep prompts concise and clear
+- Output-format instructions ("comma-separated list", "no introductions") are redundant
+  under `structured_output: true`, where a JSON schema already forces the shape. They
+  still matter with `structured_output: false`, which is why the defaults keep them.
 
 ### Cache Configuration
 
