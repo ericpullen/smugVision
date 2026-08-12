@@ -850,13 +850,26 @@ class LlamaVisionModel(VisionModel):
                     f"Please use their name{plural}{name_hint} when describing them."
                 )
         elif total_faces and total_faces > 0:
-            # Faces were detected but nobody was recognized - still useful context.
+            # Faces were detected but face recognition matched nobody. "Do not invent
+            # names" is right when no other source of identity exists, but a hint IS
+            # such a source: telling the model both "do not invent names" and "the girl
+            # in the pink hat is Ada Rivera" makes it obey the prohibition and describe
+            # her as "a young girl". So the prohibition narrows to guessing when a hint
+            # is present, rather than forbidding names outright.
             people_word = "person" if total_faces == 1 else "people"
-            context_parts.append(
+            # The no-hint wording is left exactly as it was, so a run without hints
+            # produces a byte-identical prompt to before this change.
+            preamble = (
                 f"There {'is' if total_faces == 1 else 'are'} {total_faces} {people_word} "
-                f"visible in this image, none of whom could be identified by name. "
-                f"Do not invent names."
+                f"visible in this image, none of whom could be identified by name."
             )
+            if hints and hints.strip():
+                context_parts.append(
+                    f"{preamble} Do not guess at a name, but any name given in the known "
+                    f"facts below IS correct - use it when referring to that person."
+                )
+            else:
+                context_parts.append(f"{preamble} Do not invent names.")
 
         # Add location context if available
         if location_context:
