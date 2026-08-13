@@ -34,6 +34,8 @@
     let albumPicker = null;   // album-scope people picker, built after results load
     let pendingWriteKeys = null;  // image keys the open confirm dialog named
     let regenerating = 0;         // in-flight single-frame re-reads
+    let sweeping = false;         // an album-wide re-read is running
+    let stopSweep = false;        // asked to stop after the frame in flight
 
     /* Most frames are the same few people, so the picker pins those and files the rest
        behind a drawer. The pinned set is the user's, kept in localStorage: it is a
@@ -58,6 +60,8 @@
         dom.albumHintBox = document.getElementById('album-hint-box');
         dom.albumHint = document.getElementById('album-hint');
         dom.albumHintBtn = document.getElementById('album-hint-btn');
+        dom.albumRereadBtn = document.getElementById('album-reread-btn');
+        dom.albumRereadStop = document.getElementById('album-reread-stop');
         dom.albumHintStatus = document.getElementById('album-hint-status');
         dom.albumLocation = document.getElementById('album-location');
         dom.albumPeople = document.getElementById('album-people');
@@ -89,6 +93,12 @@
         });
         dom.confirmBtn.addEventListener('click', doCommit);
         dom.albumHintBtn.addEventListener('click', saveAlbumHint);
+        dom.albumRereadBtn.addEventListener('click', rereadAlbum);
+        dom.albumRereadStop.addEventListener('click', function () {
+            stopSweep = true;
+            dom.albumRereadStop.disabled = true;
+            S.announce(dom.albumHintStatus, 'Stopping after this frame…');
+        });
 
         loadResults();
     });
@@ -132,6 +142,7 @@
             + (data.replace_existing ? '  ·  replacing existing metadata' : '');
 
         renderTally(data.stats);
+        renderRereadButton();
         renderHintEditors();
         renderGrid();
         renderWritePanel();
@@ -140,6 +151,16 @@
             dom.gridStatus,
             S.plural(images.length, 'frame') + ' in this proof run.'
         );
+    }
+
+    /* Say how much work the button is about to do: "every frame" reads very
+       differently on a 5-frame run and on a 330-frame one. */
+    function renderRereadButton() {
+        if (!dom.albumRereadBtn) return;
+        dom.albumRereadBtn.textContent = images.length
+            ? 'Save & re-read all ' + S.plural(images.length, 'frame')
+            : 'Save & re-read every frame';
+        dom.albumRereadBtn.disabled = !images.length;
     }
 
     function renderTally(stats) {
@@ -223,28 +244,41 @@
         if (set) drawer.open = true;
     }
 
+    /**
+     * Write the album-scope note, location and people, and fold the stored result back
+     * into the page. Shared by "Save album note" and the re-read-everything sweep, so
+     * both persist exactly the same thing.
+     *
+     * @returns {Promise<Object>} the stored hint as the server echoed it
+     */
+    async function persistAlbumHint() {
+        const result = await S.apiPut('/api/hints', {
+            scope: 'album',
+            key: albumKey,
+            text: dom.albumHint.value,
+            location: dom.albumLocation.value,
+            people: albumPicker ? albumPicker.selected() : []
+        });
+        hints.album = result.text;
+        dom.albumHint.value = result.text;
+        hints.album_location = result.location || '';
+        dom.albumLocation.value = hints.album_location;
+        hints.album_people = result.people || [];
+        syncAlbumPeopleDrawer();
+        return result;
+    }
+
     async function saveAlbumHint() {
         const restore = S.busy(dom.albumHintBtn, 'Saving album note');
         S.announce(dom.albumHintStatus, '');
         try {
-            const result = await S.apiPut('/api/hints', {
-                scope: 'album',
-                key: albumKey,
-                text: dom.albumHint.value,
-                location: dom.albumLocation.value,
-                people: albumPicker ? albumPicker.selected() : []
-            });
-            hints.album = result.text;
-            dom.albumHint.value = result.text;
-            hints.album_location = result.location || '';
-            dom.albumLocation.value = hints.album_location;
-            hints.album_people = result.people || [];
-            syncAlbumPeopleDrawer();
+            const result = await persistAlbumHint();
             S.announce(
                 dom.albumHintStatus,
                 result.cleared
                     ? 'Album note cleared. Re-read a frame to see the effect.'
-                    : 'Album note saved. Re-read a frame to apply it.',
+                    : 'Album note saved. Nothing on screen has changed yet - a note only ' +
+                      'reaches the model on the next read.',
                 'ok'
             );
         } catch (error) {
@@ -252,6 +286,101 @@
         } finally {
             restore();
         }
+    }
+
+    /**
+     * Save the album note and then re-read every frame in this run with it applied.
+     *
+     * Sequential on purpose: the model is a single local Ollama process, so firing
+     * frames at it in parallel would not finish sooner and would make the progress
+     * line meaningless. The whole sweep counts as one in-flight re-read, which holds
+     * the write path shut from the first frame to the last.
+     */
+    async function rereadAlbum() {
+        if (sweeping) return;
+        if (!images.length) {
+            S.announce(dom.albumHintStatus, 'This run has no frames to re-read.');
+            return;
+        }
+
+        sweeping = true;
+        stopSweep = false;
+        regenerating += 1;
+        syncWriteButton();
+        setFrameNotesDisabled(true);
+        dom.albumRereadStop.disabled = false;
+        dom.albumRereadStop.classList.remove('hidden');
+        const restore = S.busy(dom.albumRereadBtn, 'Re-reading every frame');
+
+        // Snapshot the keys: each frame's card is rebuilt as it lands, and a sweep of a
+        // long album should cover the run it started on.
+        const keys = images.map(function (image) { return image.image_key; });
+        let done = 0;
+        let failed = 0;
+        let stopped = false;
+
+        try {
+            S.announce(dom.albumHintStatus, 'Saving album note…');
+            try {
+                await persistAlbumHint();
+            } catch (error) {
+                S.announce(
+                    dom.albumHintStatus,
+                    'Could not save the note, so nothing was re-read: ' + error.message,
+                    'error'
+                );
+                return;
+            }
+
+            for (let i = 0; i < keys.length; i++) {
+                if (stopSweep) {
+                    stopped = true;
+                    break;
+                }
+                S.announce(
+                    dom.albumHintStatus,
+                    'Re-reading frame ' + (i + 1) + ' of ' + keys.length + '…'
+                );
+                if (await rereadFrame(keys[i], null)) done += 1;
+                else failed += 1;
+
+                // Each landed frame rebuilds its card, which brings its own buttons back.
+                if (sweeping) setFrameNotesDisabled(true);
+            }
+
+            const parts = [S.plural(done, 'frame') + ' re-read with the album note'];
+            if (failed) parts.push(S.plural(failed, 'frame') + ' failed');
+            if (stopped) {
+                parts.push('stopped early, ' +
+                    (keys.length - done - failed) + ' left untouched');
+            }
+            S.announce(
+                dom.albumHintStatus,
+                parts.join('  ·  '),
+                failed ? 'error' : 'ok'
+            );
+        } finally {
+            restore();
+            setFrameNotesDisabled(false);
+            dom.albumRereadStop.classList.add('hidden');
+            regenerating -= 1;
+            syncWriteButton();
+            sweeping = false;
+        }
+    }
+
+    /**
+     * Disable the per-frame save buttons for the duration of a sweep.
+     *
+     * Without this, a frame could be re-read by the sweep and by its own button at the
+     * same time, and the two replies would race to replace the same card.
+     */
+    function setFrameNotesDisabled(disabled) {
+        // Only the save buttons: the picker's star buttons are inside .margin-note too,
+        // and pinning somebody mid-sweep is harmless.
+        dom.grid.querySelectorAll('.margin-note button.note-save').forEach(function (button) {
+            button.disabled = disabled;
+        });
     }
 
     /* -------------------------------------------------------------- *
@@ -719,7 +848,7 @@
 
         const button = el('button', {
             type: 'button',
-            className: 'secondary',
+            className: 'secondary note-save',
             text: 'Save note & re-read'
         });
         button.addEventListener('click', function () {
@@ -818,6 +947,27 @@
         }
 
         S.announce(status, 'Re-reading this frame with the model…');
+        const ok = await rereadFrame(imageKey, status);
+        restore();
+        return ok;
+    }
+
+    /**
+     * Re-read one frame and swap its card in place.
+     *
+     * The hint save is deliberately NOT part of this: a single frame saves its own
+     * note first, and an album-wide sweep saves the album note once and then reuses
+     * this for every frame. One re-read path, two callers.
+     *
+     * @param {string} imageKey frame to re-read
+     * @param {Element} status where to report a failure that leaves no card to write on
+     * @returns {Promise<boolean>} true when the frame came back cleanly
+     */
+    async function rereadFrame(imageKey, status) {
+        const card = dom.grid.querySelector(
+            '.image-card[data-image-key="' + cssEscape(imageKey) + '"]'
+        );
+        setCardBusy(card, true, 'Re-reading…');
 
         let payload;
         try {
@@ -832,10 +982,9 @@
                 announceOnCard(imageKey, error.message, 'error');
             } else {
                 setCardBusy(card, false);
-                S.announce(status, error.message, 'error');
+                if (status) S.announce(status, error.message, 'error');
             }
-            restore();
-            return;
+            return false;
         }
 
         applyRegenerated(payload, imageKey);
@@ -846,7 +995,7 @@
                 : 'Re-read with no note applied.',
             'ok'
         );
-        restore();
+        return true;
     }
 
     /** Swap one card's data in place, leaving every other card untouched. */

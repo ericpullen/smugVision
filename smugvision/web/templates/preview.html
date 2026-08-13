@@ -70,6 +70,14 @@
 
         <div class="button-row">
             <button type="button" class="secondary" id="album-hint-btn">Save album note</button>
+            <!-- Saving alone does not change any proposal already on screen: a note only
+                 reaches the model on the next read. This is that read, for every frame. -->
+            <button type="button" class="secondary" id="album-reread-btn">
+                Save &amp; re-read every frame
+            </button>
+            <button type="button" class="secondary hidden" id="album-reread-stop">
+                Stop after this frame
+            </button>
             <span class="note-status" id="album-hint-status" role="status" aria-live="polite"></span>
         </div>
 
