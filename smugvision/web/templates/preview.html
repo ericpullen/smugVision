@@ -3,8 +3,7 @@
 {% block title %}smugVision - Proof Sheet{% endblock %}
 
 {% block content %}
-<div id="proof-root" data-job-id="{{ job_id }}"
-     data-write-mode="{{ 'write' if request.args.get('write') else 'dry' }}">
+<div id="proof-root" data-job-id="{{ job_id }}">
 
     <article>
         <header>
@@ -57,13 +56,17 @@
             </p>
         </div>
 
-        <div class="field">
+        <!-- Collapsed: naming people for a WHOLE album is the rare case, since most
+             albums are not the same faces in every frame. Per-frame pickers live on
+             the cards, where the picture is. -->
+        <details class="field album-people-drawer" id="album-people-drawer">
+            <summary id="album-people-summary">Who is in this whole album?</summary>
             <div id="album-people"></div>
             <p class="field-hint" id="album-people-hint">
                 Applies to every frame in this album whose own picker is empty. Use it
                 when the recogniser keeps missing the same people across a whole event.
             </p>
-        </div>
+        </details>
 
         <div class="button-row">
             <button type="button" class="secondary" id="album-hint-btn">Save album note</button>
@@ -87,8 +90,7 @@
          SmugMug. Collapsed by default, made of a different material
          than every other control, and latched.
          ============================================================ -->
-    <details class="safelight-panel hidden" id="write-panel"
-             {% if request.args.get('write') %}open{% endif %}>
+    <details class="safelight-panel hidden" id="write-panel">
         <summary>Write these changes to SmugMug</summary>
 
         <h3>This writes to your real SmugMug account</h3>

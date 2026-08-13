@@ -528,11 +528,6 @@
      * Starting a proof run  (always dry-run; never writes)
      * -------------------------------------------------------------- */
 
-    function selectedWriteMode() {
-        const checked = document.querySelector('input[name="run-mode"]:checked');
-        return checked ? checked.value : 'dry';
-    }
-
     async function startRun(body, label) {
         if (running) return;
         running = true;
@@ -642,8 +637,7 @@
                 '. Opening the proof sheet…'
             );
 
-            let target = '/preview/' + encodeURIComponent(job.job_id);
-            if (selectedWriteMode() === 'write') target += '?write=1';
+            const target = '/preview/' + encodeURIComponent(job.job_id);
             window.setTimeout(function () {
                 window.location.href = target;
             }, 250);

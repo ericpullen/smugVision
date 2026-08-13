@@ -35,6 +35,15 @@
     let pendingWriteKeys = null;  // image keys the open confirm dialog named
     let regenerating = 0;         // in-flight single-frame re-reads
 
+    /* Most frames are the same few people, so the picker pins those and files the rest
+       behind a drawer. The pinned set is the user's, kept in localStorage: it is a
+       preference about this browser's UI, not a fact about the photos, so it does not
+       belong in ~/.smugvision alongside hints and relationships. */
+    const FAVOURITES_KEY = 'smugvision.favouritePeople';
+    const FAVOURITES_SEED = 4;
+    let favourites = null;        // array of names; lazily loaded, then authoritative
+    const livePickers = [];       // built pickers, re-rendered when the pinned set moves
+
     document.addEventListener('DOMContentLoaded', function () {
         const root = document.getElementById('proof-root');
         jobId = root.dataset.jobId;
@@ -175,6 +184,7 @@
             'album-people-hint'
         );
         S.setChildren(dom.albumPeople, [albumPicker.node]);
+        syncAlbumPeopleDrawer();
 
         if (hints.global) {
             S.setChildren(dom.globalHintSummary, [
@@ -190,6 +200,27 @@
                 })
             ]);
         }
+    }
+
+    /**
+     * Keep the album-scope drawer honest about itself.
+     *
+     * Naming people for a whole album is the rare case, so the drawer starts closed -
+     * but an override that IS set has to be visible, or the user cannot see why every
+     * frame is claiming the same person. When something is set the drawer says so and
+     * opens itself; when nothing is, it stays a single quiet line.
+     */
+    function syncAlbumPeopleDrawer() {
+        const drawer = document.getElementById('album-people-drawer');
+        const summary = document.getElementById('album-people-summary');
+        if (!drawer || !summary) return;
+
+        const set = (hints.album_people || []).length;
+        summary.textContent = set
+            ? 'Who is in this whole album? (' + set + ' set, applies to every frame)'
+            : 'Who is in this whole album?';
+        drawer.classList.toggle('is-set', Boolean(set));
+        if (set) drawer.open = true;
     }
 
     async function saveAlbumHint() {
@@ -208,6 +239,7 @@
             hints.album_location = result.location || '';
             dom.albumLocation.value = hints.album_location;
             hints.album_people = result.people || [];
+            syncAlbumPeopleDrawer();
             S.announce(
                 dom.albumHintStatus,
                 result.cleared
@@ -429,6 +461,87 @@
      * is keyboard-navigable and screen-reader-sane for free, and the face sample gives
      * the visual recognition a name list does not.
      */
+    /* -------------------------------------------------------------- *
+     * Who is in this picture: pinned people, everyone else in a drawer
+     * -------------------------------------------------------------- */
+
+    /**
+     * The pinned set, read once from localStorage and then held in memory.
+     *
+     * With nothing stored yet it is seeded from how often each person has actually been
+     * picked before (picker_count), falling back to reference-photo count for people
+     * with no history. Neither is truth - somebody you photograph constantly may never
+     * have needed a manual override - so the seed only has to beat an empty row until
+     * the first star is clicked.
+     */
+    function loadFavourites() {
+        if (favourites) return favourites;
+
+        const known = {};
+        knownFaces.forEach(function (face) { known[face.name] = true; });
+
+        let stored = null;
+        try {
+            stored = JSON.parse(window.localStorage.getItem(FAVOURITES_KEY));
+        } catch (error) {
+            stored = null;   // unreadable or disabled storage is not worth a failure
+        }
+
+        if (Array.isArray(stored)) {
+            // Drop anyone whose reference folder has since gone, so a renamed person
+            // cannot leave a permanently dead tile pinned.
+            favourites = stored.filter(function (name) { return known[name]; });
+        } else {
+            favourites = knownFaces.slice()
+                .sort(function (a, b) {
+                    return (b.picker_count || 0) - (a.picker_count || 0) ||
+                        b.reference_count - a.reference_count;
+                })
+                .slice(0, FAVOURITES_SEED)
+                .map(function (face) { return face.name; });
+        }
+        return favourites;
+    }
+
+    function saveFavourites() {
+        try {
+            window.localStorage.setItem(FAVOURITES_KEY, JSON.stringify(favourites));
+        } catch (error) {
+            /* Private mode or a full quota: the pinned set still works for this page. */
+        }
+    }
+
+    function toggleFavourite(name) {
+        const list = loadFavourites();
+        const at = list.indexOf(name);
+        if (at === -1) list.push(name);
+        else list.splice(at, 1);
+        saveFavourites();
+
+        // Every picker on the page shows the same pinned set, so they all move together.
+        for (let i = livePickers.length - 1; i >= 0; i--) {
+            if (!livePickers[i].node.isConnected) livePickers.splice(i, 1);
+            else livePickers[i].rebuild();
+        }
+    }
+
+    function faceThumb(name) {
+        const img = el('img', {
+            className: 'picker-face',
+            src: '/api/face-sample/' + encodeURIComponent(name),
+            alt: ''
+        });
+        img.addEventListener('error', function () { img.remove(); });
+        return img;
+    }
+
+    /**
+     * Build a people picker whose pinned people are always on screen as large tiles
+     * and whose remaining people sit in a collapsed drawer.
+     *
+     * Selection state lives in a closure rather than in the DOM, so re-rendering after
+     * a star click cannot lose a tick the user has already made.
+     */
     function buildPeoplePicker(idPrefix, selected, legendText, describedBy) {
         const chosen = {};
         (selected || []).forEach(function (name) { chosen[name] = true; });
@@ -444,38 +557,124 @@
             };
         }
 
-        const boxes = knownFaces.map(function (face) {
-            const id = idPrefix + '-' + face.name;
-            const box = el('input', {type: 'checkbox', id: id, value: face.name});
-            box.checked = !!chosen[face.name];
-            const img = el('img', {
-                className: 'picker-face',
-                src: '/api/face-sample/' + encodeURIComponent(face.name),
-                alt: ''
-            });
-            img.addEventListener('error', function () { img.remove(); });
-            return el('div', {className: 'picker-item'}, [
-                box,
-                el('label', {for: id}, [img, el('span', {text: face.display_name})])
-            ]);
-        });
+        const pinnedRow = el('div', {className: 'picker-pinned'});
+        const drawerList = el('div', {className: 'picker-list'});
+        const drawerSummary = el('summary', {});
+        const drawer = el('details', {className: 'picker-drawer'}, [
+            drawerSummary, drawerList
+        ]);
 
         const fieldset = el('fieldset', {className: 'people-picker'}, [
-            el('legend', {text: legendText})
-        ].concat(boxes));
-        if (describedBy) {
-            fieldset.setAttribute('aria-describedby', describedBy);
+            el('legend', {text: legendText}),
+            pinnedRow,
+            drawer
+        ]);
+        if (describedBy) fieldset.setAttribute('aria-describedby', describedBy);
+
+        /* `tile` is layout (big, in the top row) and `pinned` is state (the star).
+           They usually agree, but a ticked-but-unpinned person is hoisted into the top
+           row and must look like its neighbours while still offering an empty star. */
+        function personItem(face, tile, pinned) {
+            const id = idPrefix + '-' + face.name;
+            const box = el('input', {
+                type: 'checkbox',
+                id: id,
+                value: face.name,
+                className: 'visually-hidden'
+            });
+            box.checked = !!chosen[face.name];
+            box.addEventListener('change', function () {
+                chosen[face.name] = box.checked;
+            });
+
+            const star = el('button', {
+                type: 'button',
+                className: 'picker-star' + (pinned ? ' is-on' : ''),
+                'aria-pressed': pinned ? 'true' : 'false',
+                'aria-label': (pinned ? 'Unpin ' : 'Pin ') + face.display_name,
+                title: pinned
+                    ? 'Unpin ' + face.display_name
+                    : 'Pin ' + face.display_name + ' so they always show here',
+                text: pinned ? '★' : '☆'
+            });
+            star.addEventListener('click', function () {
+                toggleFavourite(face.name);
+            });
+
+            return el('div', {
+                className: 'picker-item' + (tile ? ' is-tile' : '')
+            }, [
+                box,
+                el('label', {for: id}, [
+                    faceThumb(face.name),
+                    el('span', {className: 'picker-name', text: face.display_name})
+                ]),
+                star
+            ]);
         }
 
-        return {
+        function rebuild() {
+            const pinned = loadFavourites();
+            const isPinned = {};
+            pinned.forEach(function (name) { isPinned[name] = true; });
+
+            const byName = {};
+            knownFaces.forEach(function (face) { byName[face.name] = face; });
+
+            // Anyone already ticked is hoisted out of the drawer when the picker is
+            // built, so a saved selection is visible on load instead of hiding inside a
+            // collapsed drawer. Ticking someone mid-session does not move them: pulling
+            // a control out from under the cursor is worse than leaving it where it is.
+            const upFront = pinned.slice();
+            Object.keys(chosen).forEach(function (name) {
+                if (chosen[name] && byName[name] && !isPinned[name]) upFront.push(name);
+            });
+
+            const upFrontSet = {};
+            upFront.forEach(function (name) { upFrontSet[name] = true; });
+
+            S.setChildren(pinnedRow, upFront
+                .filter(function (name) { return byName[name]; })
+                .map(function (name) {
+                    return personItem(byName[name], true, !!isPinned[name]);
+                }));
+
+            const rest = knownFaces.filter(function (face) {
+                return !upFrontSet[face.name];
+            });
+            S.setChildren(drawerList, rest.map(function (face) {
+                return personItem(face, false, false);
+            }));
+
+            drawerSummary.textContent = rest.length
+                ? 'Everyone else (' + rest.length + ')'
+                : 'Everyone is shown above';
+            drawer.classList.toggle('hidden', !rest.length);
+
+            if (!upFront.length) {
+                S.setChildren(pinnedRow, [
+                    el('p', {
+                        className: 'field-hint',
+                        text: 'Nobody pinned. Open the drawer and use ☆ to pin the ' +
+                              'people you tag most.'
+                    })
+                ]);
+            }
+        }
+
+        rebuild();
+
+        const picker = {
             node: fieldset,
+            rebuild: rebuild,
             selected: function () {
-                return boxes
-                    .map(function (item) { return item.querySelector('input'); })
-                    .filter(function (box) { return box.checked; })
-                    .map(function (box) { return box.value; });
+                return Object.keys(chosen).filter(function (name) {
+                    return chosen[name];
+                });
             }
         };
+        livePickers.push(picker);
+        return picker;
     }
 
     function buildMarginNote(image) {

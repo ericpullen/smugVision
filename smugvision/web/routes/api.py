@@ -739,14 +739,23 @@ def list_faces():
                 "message": "Face recognition is not enabled or configured"
             })
         
+        # How often each person has actually been picked, so the UI can pin the people
+        # this user really tags instead of guessing from reference-photo counts.
+        try:
+            usage = service.hints.people_usage()
+        except Exception as e:
+            logger.warning(f"Could not read people usage for the picker: {e}")
+            usage = {}
+
         faces = []
         for name, encodings in service.face_recognizer.reference_faces.items():
             faces.append({
                 "name": name,
                 "display_name": name.replace("_", " "),
                 "reference_count": len(encodings),
+                "picker_count": usage.get(name, 0),
             })
-        
+
         # Sort by display name
         faces.sort(key=lambda f: f["display_name"])
         

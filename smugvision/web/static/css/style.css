@@ -1977,18 +1977,41 @@ dialog#confirm-write-modal {
     border-radius: 6px;
     padding: 0.6rem 0.75rem 0.75rem;
     margin: 0.5rem 0 0.35rem;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
-    gap: 0.35rem 0.75rem;
 }
 
 .people-picker legend {
-    grid-column: 1 / -1;
     padding: 0 0.35rem;
     font-size: 0.85rem;
     letter-spacing: 0.02em;
     text-transform: uppercase;
     opacity: 0.75;
+}
+
+/* The pinned few, as tiles big enough to hit without aiming. Four across on a card,
+   more on a wide album panel. */
+.picker-pinned {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+}
+
+/* Everyone else keeps the old compact row: reachable, but not competing for attention. */
+.picker-drawer {
+    margin-top: 0.5rem;
+}
+
+.picker-drawer > summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    opacity: 0.75;
+}
+
+.picker-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: 0.35rem 0.75rem;
+    padding: 0.5rem 0 0.25rem;
 }
 
 .picker-item {
@@ -2007,7 +2030,7 @@ dialog#confirm-write-modal {
     min-width: 0;
 }
 
-.picker-item label span {
+.picker-item .picker-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2024,6 +2047,99 @@ dialog#confirm-write-modal {
 .picker-item input:focus-visible + label {
     outline: 2px solid var(--focus, #6cf);
     outline-offset: 2px;
+}
+
+/* --- Tiles in the top row ------------------------------------------------ */
+
+.picker-item.is-tile {
+    position: relative;
+    display: block;
+}
+
+.picker-item.is-tile label {
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.45rem 0.3rem 0.4rem;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    text-align: center;
+    /* The whole tile is the target, not just the 1rem checkbox it replaces. */
+    width: 100%;
+}
+
+.picker-item.is-tile label:hover {
+    background: var(--slip);
+}
+
+.picker-item.is-tile .picker-face {
+    width: 3.25rem;
+    height: 3.25rem;
+}
+
+.picker-item.is-tile .picker-name {
+    font-size: 0.78rem;
+    max-width: 100%;
+    /* Wrap rather than ellipsise: "Sam Rive..." is worse than two short lines,
+       and the equal-height labels below keep the row tidy when one name wraps. */
+    white-space: normal;
+    line-height: 1.25;
+}
+
+.picker-item.is-tile label {
+    height: 100%;
+    justify-content: flex-start;
+}
+
+/* Ticked has to be obvious at a glance across a row of similar faces, so it changes
+   the frame and the ground, not just a tick mark. */
+.picker-item.is-tile input:checked + label {
+    border-color: var(--accent-ink);
+    background: var(--accent-wash);
+    font-weight: 600;
+}
+
+.picker-item.is-tile input:checked + label .picker-face {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 2px;
+}
+
+/* --- Pin / unpin ------------------------------------------------- */
+
+.picker-star {
+    flex: none;
+    background: none;
+    border: 0;
+    padding: 0.1rem 0.2rem;
+    line-height: 1;
+    font-size: 0.9rem;
+    color: var(--ink-4);
+    cursor: pointer;
+}
+
+.picker-star:hover {
+    color: var(--caution);
+}
+
+.picker-star.is-on {
+    color: var(--caution);
+}
+
+/* On a tile the star sits in the corner rather than taking a column of its own. */
+.picker-item.is-tile .picker-star {
+    position: absolute;
+    top: 0.1rem;
+    right: 0.1rem;
+}
+
+.album-people-drawer > summary {
+    cursor: pointer;
+}
+
+/* An album-wide override affects every frame, so when one is set the drawer stops
+   looking like an empty optional extra. */
+.album-people-drawer.is-set > summary {
+    color: var(--caution);
+    font-weight: 600;
 }
 
 /* A proposed Title reads as a label, not prose, so it gets its own weight. */

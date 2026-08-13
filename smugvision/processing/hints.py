@@ -510,6 +510,24 @@ class HintManager:
             },
         }
 
+    def people_usage(self) -> Dict[str, int]:
+        """Count how often each person has been named in a people override.
+
+        This is the only record of who the user actually tags, which is a better
+        ranking for a picker than how many reference photos a person happens to have:
+        somebody can have the most reference photos and never once be picked.
+
+        Returns:
+            ``{person_name: times named}`` using raw underscore names, counting album
+            and image scopes together. People never named are absent, not zero.
+        """
+        self._ensure_fresh()
+        usage: Dict[str, int] = {}
+        for names in list(self._album_people.values()) + list(self._image_people.values()):
+            for name in names or []:
+                usage[name] = usage.get(name, 0) + 1
+        return usage
+
     @property
     def hint_count(self) -> int:
         """Number of stored hints, counting the global hint as one."""
