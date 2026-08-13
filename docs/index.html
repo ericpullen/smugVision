@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smugVision — captions and keywords for SmugMug, from a vision model on your own machine</title>
+<meta name="description" content="smugVision reads a SmugMug album with a local Ollama vision model and proposes a caption, title and keywords for every photo — knowing your people, pets and places. Nothing is written until you confirm.">
+<meta name="author" content="Eric Pullen">
+<link rel="canonical" href="https://smugvision.ericpullen.com/">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://smugvision.ericpullen.com/">
+<meta property="og:title" content="smugVision — AI captions and keywords for SmugMug, run locally">
+<meta property="og:description" content="A local vision model reads your album and proposes a caption, title and keywords for every photo. You proof the whole sheet before a single byte reaches SmugMug.">
+<meta property="og:image" content="https://smugvision.ericpullen.com/screenshots/04-frame-card.png">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="masthead">
+    <div class="wrap">
+        <a class="brand" href="#top">smugVision <span class="seal">proof</span></a>
+        <nav aria-label="Section">
+            <a class="opt" href="#how">How it works</a>
+            <a class="opt" href="#proof">Proof sheet</a>
+            <a class="opt" href="#hints">Hints</a>
+            <a href="#start">Get started</a>
+            <a href="https://github.com/ericpullen/smugVision">GitHub</a>
+        </nav>
+    </div>
+</header>
+
+<main id="main">
+
+<!-- ============================================================ HERO -->
+<section class="hero" id="top">
+    <div class="wrap">
+        <div class="split">
+            <div>
+                <h1>Your photos, described by a model that knows your people.</h1>
+                <p class="tagline">
+                    smugVision reads a SmugMug album with a vision model running on
+                    <em>your own machine</em>, and proposes a caption, a title and a set
+                    of keywords for every frame. You proof the whole sheet before a
+                    single byte reaches SmugMug.
+                </p>
+                <ul class="badges">
+                    <li class="badge">100% local inference</li>
+                    <li class="badge">Python 3.9+</li>
+                    <li class="badge">MIT licensed</li>
+                    <li class="badge">CLI + web UI</li>
+                </ul>
+                <div class="cta-row">
+                    <a class="btn btn-primary" href="#start">Get started</a>
+                    <a class="btn btn-ghost" href="https://github.com/ericpullen/smugVision">View on GitHub</a>
+                </div>
+            </div>
+
+            <figure class="frame">
+                <img src="screenshots/04-frame-card.png"
+                     alt="Two proof-sheet cards side by side. Each shows a photograph above a proposed title, caption and a row of keyword chips, with a PROPOSED badge in the corner."
+                     width="1280" height="633">
+                <figcaption>
+                    One card per frame: the photograph, and what smugVision proposes for it.
+                    Nothing here has been written yet.
+                </figcaption>
+            </figure>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================================ WHY -->
+<section class="section" id="why">
+    <div class="wrap">
+        <div class="section-head">
+            <p class="eyebrow">Why it exists</p>
+            <h2>An auto-tagger that can be told it is wrong.</h2>
+            <p class="lede">
+                A vision model describes what a photo <em>looks like</em>, not what it
+                <em>is</em>. It cannot know that the ribbed white object is a Nylabone
+                rather than a cracker, or that the girl in the pink hat is your
+                daughter. So smugVision lets you say so — and treats what you say as
+                ground truth.
+            </p>
+        </div>
+
+        <div class="grid">
+            <article class="card">
+                <h3>
+                    <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                        <path d="M12 2 4 6v6c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6z"/>
+                    </svg>
+                    Nothing leaves your network
+                </h3>
+                <p>
+                    Inference runs against a local Ollama model of your choosing. Your
+                    photographs, the faces in them and the names you attach are never
+                    uploaded to a third-party API. The only host smugVision talks to is
+                    SmugMug itself.
+                </p>
+            </article>
+
+            <article class="card">
+                <h3>
+                    <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                        <circle cx="9" cy="8" r="3.2"/>
+                        <path d="M3.5 20a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 5M18.5 20a5.5 5.5 0 0 0-3-4.9"/>
+                    </svg>
+                    It knows who is in the shot
+                </h3>
+                <p>
+                    Point it at a folder of reference faces and recognised people flow
+                    into the caption, the keywords and a relationships lookup. When the
+                    recogniser misses somebody, you name them yourself and your list
+                    wins outright.
+                </p>
+            </article>
+
+            <article class="card">
+                <h3>
+                    <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                        <path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/>
+                        <circle cx="12" cy="10" r="2.6"/>
+                    </svg>
+                    And where it was taken
+                </h3>
+                <p>
+                    GPS is read from the SmugMug API first and EXIF second, then
+                    resolved to a place name — through your own named locations before
+                    any geocoder is consulted. Wrong place? Override it for the caption
+                    and the keywords both.
+                </p>
+            </article>
+
+            <article class="card">
+                <h3>
+                    <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                        <rect x="3" y="4" width="18" height="14" rx="2"/>
+                        <path d="M8 21h8M12 18v3M7 9h6M7 13h4"/>
+                    </svg>
+                    Two front ends, one core
+                </h3>
+                <p>
+                    A CLI for batch work and a web proof sheet for review. Both drive
+                    the same processor, so anything true of one is true of the other —
+                    the UI is a window onto the pipeline, not a reimplementation of it.
+                </p>
+            </article>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================================ HOW -->
+<section class="section" id="how">
+    <div class="wrap">
+        <div class="section-head">
+            <p class="eyebrow">How it works</p>
+            <h2>What happens to a single photograph.</h2>
+            <p class="lede">
+                Every image takes the same path. Context is gathered first, your own
+                assertions are added last so nothing dilutes them, and the model is
+                asked once.
+            </p>
+        </div>
+
+        <ol class="pipeline">
+            <li>
+                <b>Skip what's done</b>
+                <span>Frames already carrying the <code>smugvision</code> marker tag are left out of the run entirely.</span>
+            </li>
+            <li>
+                <b>Fetch &amp; cache</b>
+                <span>The image is downloaded once at your chosen size and reused from disk thereafter.</span>
+            </li>
+            <li>
+                <b>Locate</b>
+                <span>GPS from the API, then EXIF. Your named places are checked before any geocoder.</span>
+            </li>
+            <li>
+                <b>Recognise faces</b>
+                <span>Names above your confidence threshold — or the list you supplied, which replaces it.</span>
+            </li>
+            <li>
+                <b>Build the prompt</b>
+                <span>Album, place, people, pets and relationships, with your notes appended last as fact.</span>
+            </li>
+            <li>
+                <b>Ask once</b>
+                <span>A single structured request returns caption, keywords and title together.</span>
+            </li>
+            <li>
+                <b>Merge &amp; propose</b>
+                <span>Output is merged with existing metadata, deduped, and shown to you. Nothing is written.</span>
+            </li>
+        </ol>
+    </div>
+</section>
+
+<!-- ============================================================ PROOF SHEET -->
+<section class="section" id="proof">
+    <div class="wrap">
+        <div class="section-head">
+            <p class="eyebrow">The web proof sheet</p>
+            <h2>Review the whole album before you commit to any of it.</h2>
+            <p class="lede">
+                <code>smugvision-web</code> binds to <code>127.0.0.1</code> and reads the
+                same config as the CLI. Every run is a dry run.
+            </p>
+        </div>
+
+        <div class="split">
+            <div class="prose">
+                <h3>Step 1 — choose an album</h3>
+                <p style="color: var(--ink-2); margin-top: var(--s4);">
+                    Browse the folder tree one level at a time. Each album carries a
+                    badge telling you whether smugVision has been there before, so a
+                    second pass is never a guess.
+                </p>
+                <div class="table-scroll">
+                    <table>
+                        <thead>
+                            <tr><th scope="col">Badge</th><th scope="col">Meaning</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><code>✓ proofed</code></td><td>Every photo already carries the marker tag</td></tr>
+                            <tr><td><code>7 of 11</code></td><td>A partial pass — a run covers the remaining four</td></tr>
+                            <tr><td><code>not proofed</code></td><td>Nothing done yet</td></tr>
+                            <tr><td><code>no photos</code></td><td>The album holds only videos, which are never proofed</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <figure class="frame">
+                <img src="screenshots/01-album-picker.png"
+                     alt="The album picker showing a folder breadcrumb and three albums, each with an image count and a proof badge."
+                     loading="lazy" width="1280" height="633">
+                <figcaption>The picker, with a proof badge on every album.</figcaption>
+            </figure>
+        </div>
+
+        <div class="split reverse" style="margin-top: var(--s8);">
+            <figure class="frame">
+                <img src="screenshots/02-run-panel.png"
+                     alt="The selected-album panel showing frame count, a time estimate, three run toggles and a Proof this album button."
+                     loading="lazy" width="1280" height="633">
+                <figcaption>The run panel counts the frames a run would actually cover.</figcaption>
+            </figure>
+
+            <div class="prose">
+                <h3>Set the run up honestly</h3>
+                <p style="color: var(--ink-2); margin-top: var(--s4);">
+                    The panel counts the frames the run will genuinely touch, not the
+                    size of the album — already-tagged frames are excluded before the
+                    estimate is made.
+                </p>
+                <ul class="note-list">
+                    <li><b>Re-proof tagged images</b> — off by default, so a second pass only loads what still needs attention.</li>
+                    <li><b>Replace instead of merge</b> — off joins your existing caption with the new one; on starts clean.</li>
+                    <li><b>Propose a title too</b> — opt-in, and an empty title is never written.</li>
+                </ul>
+            </div>
+        </div>
+
+        <figure class="frame frame-lg">
+            <img src="screenshots/03-proof-sheet.png"
+                 alt="The proof sheet header reading 43 proposed, 0 skipped, 0 failed, with a Nothing written yet seal and the album-wide note box below."
+                 loading="lazy" width="1280" height="633">
+            <figcaption>
+                Step 2 — the sheet itself. A running tally, a seal confirming nothing has
+                been written, and a note box that applies to every frame in the album.
+            </figcaption>
+        </figure>
+
+        <div class="split" style="margin-top: var(--s8);">
+            <div class="prose">
+                <h3>Correct it where it is wrong</h3>
+                <p style="color: var(--ink-2); margin-top: var(--s4);">
+                    Under every card you can add a note, override the location, say who
+                    is in the frame and tick which pets appear. Your most-used people sit
+                    as large tiles; everyone else waits in a drawer. The ☆ pins somebody
+                    to the top row for good.
+                </p>
+                <p style="color: var(--ink-2);">
+                    <b>Save note &amp; re-read</b> re-runs that one frame. At album level,
+                    <b>Save &amp; re-read every frame</b> applies a new album note across
+                    the whole run, one frame at a time, with a stop button that finishes
+                    the frame in flight.
+                </p>
+            </div>
+
+            <figure class="frame">
+                <img src="screenshots/05-people-and-pets.png"
+                     alt="The who-is-in-this-frame picker: one large pinned tile, a drawer listing fifteen other people with checkboxes, and pet chips below."
+                     loading="lazy" width="1280" height="633">
+                <figcaption>
+                    Faces other than the author's are blurred and names replaced here;
+                    the real thing shows your own reference faces.
+                </figcaption>
+            </figure>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================================ WRITING -->
+<section class="section" id="writing">
+    <div class="wrap">
+        <div class="section-head">
+            <p class="eyebrow">The write path</p>
+            <h2>One way out, and it is deliberately hard to trip over.</h2>
+        </div>
+
+        <div class="split">
+            <div class="prose">
+                <div class="callout safelight">
+                    <h3>Everything up to this point has been a dry run</h3>
+                    <p>
+                        The write panel is the only part of smugVision that touches your
+                        SmugMug account, and it is the only thing on the page rendered in
+                        darkroom red. It stays collapsed until you go looking for it.
+                    </p>
+                </div>
+
+                <ul class="note-list" style="margin-top: var(--s5);">
+                    <li><b>Expand</b> the panel and read the list of every frame that would change.</li>
+                    <li><b>Arm the latch</b> — an explicit checkbox confirming you reviewed the proposals.</li>
+                    <li><b>Confirm the dialog</b>, which names the album and the exact number of images.</li>
+                </ul>
+
+                <p style="color: var(--ink-2); margin-top: var(--s5);">
+                    After a clean write you land back on the album list, at the folder you
+                    started from, with that album's badge brought up to date. A partial
+                    write keeps you on the sheet — that is precisely when you need to see
+                    what failed.
+                </p>
+            </div>
+
+            <div>
+                <figure class="frame">
+                    <img src="screenshots/06-write-panel.png"
+                         alt="The write panel in red, listing forty-three filenames with their image keys, an unticked latch checkbox and a disabled Write to SmugMug button."
+                         loading="lazy" width="1280" height="633">
+                    <figcaption>The safelight panel, latch unarmed.</figcaption>
+                </figure>
+
+                <figure class="frame" style="margin-top: var(--s5);">
+                    <img src="screenshots/07-confirm-write.png"
+                         alt="A confirmation dialog reading: this writes captions and keywords for 43 images to the named album. This cannot be undone from smugVision."
+                         loading="lazy" width="1280" height="633">
+                    <figcaption>The second gate names the album and the count.</figcaption>
+                </figure>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================================ HINTS -->
+<section class="section" id="hints">
+    <div class="wrap">
+        <div class="section-head">
+            <p class="eyebrow">Ground truth</p>
+            <h2>Telling it what it cannot see.</h2>
+            <p class="lede">
+                Everything in this section is you asserting a fact, and every one of them
+                outranks the model's own reading of the image. It all lives in
+                <code>~/.smugvision/hints.yaml</code>, is safe to edit by hand, and is
+                read by the CLI and the web UI alike.
+            </p>
+        </div>
+
+        <div class="split code-first">
+            <div>
+                <p class="code-label">Notes — three scopes, which accumulate</p>
+                <div class="code">
+<pre><span class="k">global</span>: <span class="s">"Ada and Sam are our children."</span>
+<span class="k">albums</span>:
+  <span class="k">Ab3kZq</span>: <span class="s">"Biscuit's 7th birthday party."</span>
+<span class="k">images</span>:
+  <span class="k">Xy7NpQr</span>: <span class="s">"The white ribbed object is a Nylabone, not food."</span></pre>
+                </div>
+
+                <p class="code-label" style="margin-top: var(--s6);">Location, people and pets — most specific scope wins</p>
+                <div class="code">
+<pre><span class="k">locations</span>:
+  <span class="k">images</span>:
+    <span class="k">Xy7NpQr</span>: <span class="s">"Gorilla Enclosure, Louisville Zoo"</span>
+<span class="k">people</span>:
+  <span class="k">images</span>:
+    <span class="k">Xy7NpQr</span>: [<span class="s">Ada_Rivera</span>, <span class="s">Nina_Rivera</span>]
+<span class="k">pets</span>:
+  <span class="k">images</span>:
+    <span class="k">Xy7NpQr</span>: [<span class="s">Biscuit</span>]</pre>
+                </div>
+            </div>
+
+            <div class="prose">
+                <ul class="note-list">
+                    <li>
+                        <b>A note</b> is appended to the prompt last, so nothing later
+                        dilutes it. Global, album and image notes all apply at once. A
+                        wrong note produces a confidently wrong caption, so keep them
+                        factual.
+                    </li>
+                    <li>
+                        <b>A location override</b> replaces the geocoded place name
+                        outright. A note arguing with GPS usually loses, because the
+                        geocoded name is in the prompt too.
+                    </li>
+                    <li>
+                        <b>A people override</b> replaces the recognised-name list — which
+                        is the thing a note cannot do, since those names also feed the
+                        keywords and the relationships lookup. It works even with face
+                        recognition switched off entirely.
+                    </li>
+                    <li>
+                        <b>Pets</b> are named once and ticked per photo. Face recognition
+                        learns human faces, so an animal is invisible to it however often
+                        it appears — and a pet is deliberately never counted as a detected
+                        face.
+                    </li>
+                </ul>
+
+                <figure class="frame" style="margin-top: var(--s6);">
+                    <img src="screenshots/08-pets-editor.png"
+                         alt="The pets editor listing three pets with the sentence each contributes to the prompt, and a form to add another."
+                         loading="lazy" width="1280" height="633">
+                    <figcaption>
+                        Each pet contributes a sentence handed to the model verbatim.
+                    </figcaption>
+                </figure>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================================ START -->
+<section class="section" id="start">
+    <div class="wrap">
+        <div class="section-head">
+            <p class="eyebrow">Get started</p>
+            <h2>Running in about five minutes.</h2>
+            <p class="lede">
+                You need Python 3.9 or newer, <a href="https://ollama.ai/">Ollama</a> with
+                any vision-capable model pulled, and a SmugMug account with API
+                credentials.
+            </p>
+        </div>
+
+        <div class="split">
+            <div>
+                <p class="code-label">1 — install</p>
+                <div class="code">
+<pre><span class="c"># any vision model in `ollama list` will do</span>
+<span class="p">$</span> ollama pull llama3.2-vision
+
+<span class="p">$</span> git clone https://github.com/ericpullen/smugVision.git
+<span class="p">$</span> cd smugVision
+<span class="p">$</span> pip install -e .</pre>
+                </div>
+
+                <p class="code-label" style="margin-top: var(--s6);">2 — configure and authorise</p>
+                <div class="code">
+<pre><span class="c"># interactive setup -> ~/.smugvision/config.yaml</span>
+<span class="p">$</span> smugvision-config
+
+<span class="c"># OAuth 1.0a dance -> user token + secret</span>
+<span class="p">$</span> smugvision-get-tokens</pre>
+                </div>
+            </div>
+
+            <div>
+                <p class="code-label">3 — try it without writing anything</p>
+                <div class="code">
+<pre><span class="c"># the safest way to exercise the whole pipeline</span>
+<span class="p">$</span> smugvision --gallery &lt;album_key&gt; --dry-run
+
+<span class="c"># or work from a gallery URL</span>
+<span class="p">$</span> smugvision --url <span class="s">"https://site.smugmug.com/.../n-XXXXX/album"</span> --verbose</pre>
+                </div>
+
+                <p class="code-label" style="margin-top: var(--s6);">4 — or open the proof sheet</p>
+                <div class="code">
+<pre><span class="p">$</span> smugvision-web
+<span class="c"># http://127.0.0.1:5050 - local only</span></pre>
+                </div>
+
+                <div class="callout" style="margin-top: var(--s6);">
+                    <h3>Start with a dry run</h3>
+                    <p>
+                        <code>--dry-run</code> walks the entire pipeline and prints what it
+                        would do without touching your account. The web UI is a dry run by
+                        construction — there is no mode in which it writes without being
+                        told to twice.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================================ UNDER THE HOOD -->
+<section class="section" id="internals">
+    <div class="wrap">
+        <div class="section-head">
+            <p class="eyebrow">Under the hood</p>
+            <h2>Worth knowing if you plan to hack on it.</h2>
+        </div>
+
+        <div class="grid">
+            <article class="card">
+                <h3>Any Ollama model</h3>
+                <p>
+                    There is no allow-list. Every Ollama vision model maps to one generic
+                    adapter, so using a new one needs no code change — just set
+                    <code>vision.model</code> in your config.
+                </p>
+            </article>
+
+            <article class="card">
+                <h3>Pluggable face backends</h3>
+                <p>
+                    dlib by default, InsightFace as an optional extra. Both normalise to a
+                    single confidence scale, and the encoding cache records which backend
+                    produced it so the two can never be compared against each other.
+                </p>
+            </article>
+
+            <article class="card">
+                <h3>Idempotent by marker tag</h3>
+                <p>
+                    A processed image carries the <code>smugvision</code> keyword. The test
+                    is separator-aware, because SmugMug returns the whole keyword list as
+                    one semicolon-joined blob.
+                </p>
+            </article>
+
+            <article class="card">
+                <h3>Injectable collaborators</h3>
+                <p>
+                    The SmugMug client, vision model, cache and face recogniser are all
+                    constructor-injected on the processor. That seam is what lets the web
+                    UI and tests reuse the pipeline rather than reimplement it.
+                </p>
+            </article>
+
+            <article class="card">
+                <h3>State lives outside the repo</h3>
+                <p>
+                    Config, hints, pets, named locations, relationships, reference faces
+                    and the cache all sit in <code>~/.smugvision/</code>. Nothing inside the
+                    checkout is authoritative at runtime.
+                </p>
+            </article>
+
+            <article class="card">
+                <h3>Graceful degradation</h3>
+                <p>
+                    Heavy optional dependencies are imported behind availability flags. A
+                    missing face-recognition install disables that feature with a log line
+                    rather than failing the run.
+                </p>
+            </article>
+        </div>
+    </div>
+</section>
+
+</main>
+
+<footer class="footer">
+    <div class="wrap">
+        <p style="margin: 0;">
+            smugVision — captions and keywords from a local vision model.<br>
+            MIT licensed. Built by <a href="https://github.com/ericpullen">Eric Pullen</a>.
+        </p>
+        <nav aria-label="Footer">
+            <a href="https://github.com/ericpullen/smugVision">Source</a>
+            <a href="https://github.com/ericpullen/smugVision#readme">Documentation</a>
+            <a href="https://github.com/ericpullen/smugVision/issues">Issues</a>
+            <a href="https://github.com/ericpullen/smugVision/blob/main/LICENSE">License</a>
+        </nav>
+    </div>
+</footer>
+
+</body>
+</html>

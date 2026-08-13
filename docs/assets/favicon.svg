@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="smugVision">
+  <!-- Dark mat ground, as a frame sits on in the proof sheet. -->
+  <rect width="32" height="32" rx="7" fill="#26241f"/>
+  <!-- Lens: warm paper ring on the mat, with a safelight-red iris. -->
+  <circle cx="16" cy="16" r="9.5" fill="none" stroke="#f7f5f1" stroke-width="2.4"/>
+  <circle cx="16" cy="16" r="4.2" fill="#a8331f"/>
+  <!-- Catchlight. -->
+  <circle cx="12.9" cy="12.6" r="1.5" fill="#f7f5f1" opacity="0.9"/>
+</svg>
