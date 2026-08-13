@@ -2,13 +2,22 @@
 
 import logging
 import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set, Tuple
 from pathlib import Path
 
 import requests
 from requests_oauthlib import OAuth1
 
-from smugvision.smugmug.models import Album, AlbumImage
+from smugvision.smugmug.models import (
+    NODE_TYPE_FOLDER,
+    Album,
+    AlbumImage,
+    AlbumSearchResult,
+    BrowseNode,
+    NodeListing,
+    NodeRef,
+    split_keywords,
+)
 from smugvision.smugmug.exceptions import (
     SmugMugAPIError,
     SmugMugAuthError,
@@ -37,7 +46,23 @@ class SmugMugClient:
     
     API_VERSION = "v2"
     BASE_URL = f"https://api.smugmug.com/api/{API_VERSION}"
-    
+
+    #: Query parameters that nest the full Album resource inside each album node
+    #: of a ``!children`` listing, so image counts and album keys arrive without
+    #: an extra request per album. Verified essentially free in wall time; do NOT
+    #: add ``HighlightImage`` here, it costs ~2.5x.
+    _ALBUM_EXPAND_PARAMS = {"_expand": "Album", "_expandmethod": "inline"}
+
+    #: Default bounds for search_albums(). These are a safety valve against a
+    #: pathologically large account, NOT a latency knob: they are set high enough
+    #: to cover a ~1200 album / ~115 folder account completely. Cost is roughly
+    #: 0.2s per folder scanned (measured 25s for a complete 115-folder walk), so
+    #: search_albums() must never run on a request thread. Use
+    #: list_node_children() for anything interactive.
+    DEFAULT_SEARCH_MAX_DEPTH = 6
+    DEFAULT_SEARCH_MAX_FOLDERS = 300
+    DEFAULT_SEARCH_MAX_RESULTS = 2000
+
     def __init__(
         self,
         api_key: str,
@@ -69,7 +94,12 @@ class SmugMugClient:
         self.access_token = access_token
         self.access_token_secret = access_token_secret
         self.timeout = timeout
-        
+
+        # Cached root node ID. It is immutable for a set of credentials but
+        # costs an /api/v2!authuser round trip to look up, and the tree browser
+        # asks for it on every listing.
+        self._root_node_id: Optional[str] = None
+
         # Create OAuth1 authentication
         self.auth = OAuth1(
             api_key,
@@ -109,19 +139,28 @@ class SmugMugClient:
                 f"Authentication failed: {e}"
             ) from e
     
-    def get_user_root_node(self) -> str:
+    def get_user_root_node(self, use_cache: bool = True) -> str:
         """Get the authenticated user's root node ID.
-        
+
+        The value never changes for a set of credentials, so it is memoized on
+        the client after the first lookup.
+
+        Args:
+            use_cache: If False, ignore the memoized value and re-query the API
+
         Returns:
             Root node ID
-            
+
         Raises:
             SmugMugAPIError: If request fails
         """
+        if use_cache and self._root_node_id:
+            return self._root_node_id
+
         try:
             response = self._request("GET", "/api/v2!authuser")
             user = response.get("Response", {}).get("User", {})
-            
+
             # Get node URI
             uris = user.get("Uris", {})
             node_uri = uris.get("Node", {})
@@ -131,12 +170,13 @@ class SmugMugClient:
                 if "/node/" in uri:
                     node_id = uri.split("/node/")[-1]
                     logger.debug(f"User root node: {node_id}")
+                    self._root_node_id = node_id
                     return node_id
-            
+
             raise SmugMugAPIError("Could not find user root node")
         except Exception as e:
             raise SmugMugAPIError(f"Failed to get user root node: {e}") from e
-    
+
     def find_node_by_path(self, path: str) -> Optional[str]:
         """Find a node ID by navigating a path from root.
         
@@ -349,39 +389,384 @@ class SmugMugClient:
             SmugMugNotFoundError: If node not found
             SmugMugAPIError: If request fails
         """
-        logger.info(f"Fetching children of node: {node_id}")
-        
-        all_children = []
+        return self._fetch_node_children(node_id, start=start, count=count)
+
+    def _fetch_node_children(
+        self,
+        node_id: str,
+        start: int = 1,
+        count: int = 100,
+        extra_params: Optional[Dict[str, Any]] = None,
+        log_level: int = logging.INFO
+    ) -> List[Dict[str, Any]]:
+        """Fetch all children of a node, following pagination.
+
+        Shared implementation behind :meth:`get_node_children` and the tree
+        browsing methods. ``log_level`` exists so a recursive walk does not emit
+        one INFO line per node while the single-level public method keeps its
+        existing INFO logging.
+
+        Args:
+            node_id: Node ID
+            start: Starting position (1-indexed)
+            count: Number of children per page (max 100)
+            extra_params: Additional SmugMug query parameters (e.g. ``_expand``)
+            log_level: Logging level for the per-node "fetching" message
+
+        Returns:
+            List of raw child node dictionaries
+
+        Raises:
+            SmugMugNotFoundError: If node not found, or if node_id refers to an
+                album (SmugMug has no ``!children`` endpoint for album nodes)
+            SmugMugAPIError: If request fails
+        """
+        logger.log(log_level, f"Fetching children of node: {node_id}")
+
+        all_children: List[Dict[str, Any]] = []
         current_start = start
-        
+
         while True:
             endpoint = f"/node/{node_id}!children"
-            params = {
+            params: Dict[str, Any] = {
                 "start": current_start,
                 "count": min(count, 100)  # Max 100 per page
             }
-            
+            if extra_params:
+                params.update(extra_params)
+
             response = self._request("GET", endpoint, params=params)
-            
+
             response_data = response.get("Response", {})
             children = response_data.get("Node", [])
-            
+
             if not children:
                 break
-            
+
             all_children.extend(children)
             logger.debug(f"Retrieved {len(children)} children (start={current_start})")
-            
+
             # Check if there are more pages
             pages = response_data.get("Pages", {})
             if not pages.get("NextPage"):
                 break
-            
+
             current_start += len(children)
-        
+
         logger.debug(f"Found {len(all_children)} total children under node {node_id}")
         return all_children
-    
+
+    def get_node_breadcrumb(self, node_id: str) -> List[NodeRef]:
+        """Get the ancestor chain of a node, ordered root-first.
+
+        Uses SmugMug's ``!parents`` endpoint, which returns the whole chain in a
+        single request (self first, root last) and works on album nodes as well
+        as folders. The result is reversed so a UI can render it left to right,
+        and the last entry is always the node itself.
+
+        The root node's SmugMug ``Name`` is the empty string; ``NodeRef``
+        substitutes ``ROOT_NODE_LABEL`` for it.
+
+        Args:
+            node_id: Node ID to build a breadcrumb for
+
+        Returns:
+            List of NodeRef from root to the node itself. Empty if the chain
+            could not be retrieved.
+
+        Raises:
+            SmugMugNotFoundError: If the node does not exist
+            SmugMugAPIError: If the request fails
+        """
+        response = self._request(
+            "GET",
+            f"/node/{node_id}!parents",
+            params={"_shorturis": 1}
+        )
+        nodes = response.get("Response", {}).get("Node", [])
+        if not nodes:
+            logger.warning(f"No parent chain returned for node {node_id}")
+            return []
+
+        # !parents is ordered self-first / root-last; a breadcrumb reads the
+        # other way round.
+        crumbs = [NodeRef.from_api_response(n) for n in reversed(nodes)]
+        logger.debug(f"Breadcrumb for {node_id}: {' / '.join(c.name for c in crumbs)}")
+        return crumbs
+
+    def list_node_children(
+        self,
+        node_id: Optional[str] = None,
+        include_breadcrumb: bool = True,
+        include_album_details: bool = True,
+        count: int = 100
+    ) -> NodeListing:
+        """List one level of the node tree: child folders and albums.
+
+        This is the lazy, per-level primitive a gallery picker should use. It
+        costs two GETs (~0.3-0.7s measured) regardless of how large the account
+        is, because it never descends. A full recursive walk of a large account
+        takes tens of seconds and must not sit behind a page load - see
+        :meth:`search_albums` for a bounded alternative.
+
+        ``System Album`` nodes (SmugMug's own Profile Images / Cover Images) are
+        excluded even though they expose real album keys, and a child that cannot
+        be interpreted is logged and skipped rather than failing the listing.
+
+        Args:
+            node_id: Node to list. Defaults to the authenticated user's root node.
+            include_breadcrumb: If True, also fetch the ancestor chain (one extra
+                GET) and use it to verify the node is listable. When False the
+                returned breadcrumb holds only the node itself.
+            include_album_details: If True, inline-expand each album so
+                ``image_count`` and album metadata are populated without an extra
+                request per album. Set False for a slightly smaller payload;
+                ``album_key`` is still resolved either way.
+            count: Children per page (max 100); pagination is automatic.
+
+        Returns:
+            NodeListing with the node, its breadcrumb, and its child folders and
+            albums in separate lists. ``partial`` is True when part of the
+            listing could not be retrieved.
+
+        Raises:
+            SmugMugNotFoundError: If the node does not exist
+            SmugMugAPIError: If node_id refers to an album (albums have no
+                children) or the request fails
+        """
+        if not node_id:
+            node_id = self.get_user_root_node()
+
+        node_ref: Optional[NodeRef] = None
+        breadcrumb: List[NodeRef] = []
+        partial = False
+
+        if include_breadcrumb:
+            try:
+                breadcrumb = self.get_node_breadcrumb(node_id)
+            except SmugMugNotFoundError:
+                # A genuinely missing node should surface as 404, not as a
+                # confusing empty listing.
+                raise
+            except Exception as e:
+                logger.warning(f"Could not build breadcrumb for node {node_id}: {e}")
+                partial = True
+
+            if breadcrumb:
+                node_ref = breadcrumb[-1]
+                if not node_ref.is_folder:
+                    # !children 404s on album nodes, which is indistinguishable
+                    # from a bad node ID. Fail with something actionable instead.
+                    raise SmugMugAPIError(
+                        f"Node {node_id} is a {node_ref.node_type!r} "
+                        f"({node_ref.name!r}), not a folder, so it has no children. "
+                        "Albums are selected, not browsed into."
+                    )
+
+        extra_params = dict(self._ALBUM_EXPAND_PARAMS) if include_album_details else None
+        children = self._fetch_node_children(
+            node_id,
+            count=count,
+            extra_params=extra_params,
+            log_level=logging.DEBUG
+        )
+
+        folders: List[BrowseNode] = []
+        albums: List[BrowseNode] = []
+        for child in children:
+            try:
+                entry = BrowseNode.from_api_response(child)
+            except Exception as e:
+                # One malformed row must not lose the whole level.
+                logger.warning(f"Skipping unreadable child of node {node_id}: {e}")
+                partial = True
+                continue
+            if entry is None:
+                continue
+            if entry.is_folder:
+                folders.append(entry)
+            else:
+                albums.append(entry)
+
+        if node_ref is None:
+            # Reached only when the breadcrumb is unavailable (not requested, or
+            # the !parents lookup failed), so there is no real name to use.
+            node_ref = NodeRef(
+                node_id=node_id,
+                name=node_id,
+                node_type=NODE_TYPE_FOLDER,
+                is_root=node_id == self._root_node_id
+            )
+            breadcrumb = [node_ref]
+
+        logger.info(
+            f"Listed node {node_id} ({node_ref.name!r}): "
+            f"{len(folders)} folder(s), {len(albums)} album(s)"
+        )
+        return NodeListing(
+            node=node_ref,
+            breadcrumb=breadcrumb,
+            folders=folders,
+            albums=albums,
+            partial=partial
+        )
+
+    def search_albums(
+        self,
+        query: Optional[str] = None,
+        node_id: Optional[str] = None,
+        exact_match: bool = False,
+        max_depth: int = DEFAULT_SEARCH_MAX_DEPTH,
+        max_folders: int = DEFAULT_SEARCH_MAX_FOLDERS,
+        max_results: int = DEFAULT_SEARCH_MAX_RESULTS
+    ) -> AlbumSearchResult:
+        """Walk the node tree breadth-first, with hard bounds, collecting albums.
+
+        A full walk of a ~1200 album account measured ~25s over ~116 requests
+        (median 0.19s per request), so this method is bounded on THREE axes and
+        reports when a bound stopped it. Callers must check
+        ``AlbumSearchResult.truncated`` before telling a user "no matches" - a
+        truncated walk returns a partial tree, not a complete answer.
+
+        Nodes that cannot be listed are logged as warnings, recorded in
+        ``AlbumSearchResult.errors`` and skipped; the walk still returns whatever
+        it found.
+
+        Args:
+            query: Case-insensitive substring to match against album name and
+                URL name. None or empty returns every album found within bounds.
+            node_id: Node to search under. Defaults to the user's root node.
+            exact_match: If True, require the whole name (or URL name) to equal
+                ``query`` case-insensitively instead of containing it.
+            max_depth: Maximum levels below the starting node to descend. 0
+                lists only the starting node's own children.
+            max_folders: Maximum number of folders to list. This is the real cost
+                bound: roughly 0.2-0.5s per folder.
+            max_results: Maximum albums to return.
+
+        Returns:
+            AlbumSearchResult with the albums found and truncation information.
+
+        Raises:
+            SmugMugAPIError: If the starting node cannot be resolved
+        """
+        if not node_id:
+            node_id = self.get_user_root_node()
+
+        search_term = (query or "").strip().lower()
+        result = AlbumSearchResult()
+        # Breadth-first, so shallow (usually more relevant) albums come first and
+        # a truncated walk returns a sensible prefix rather than one deep branch.
+        frontier: List[Tuple[str, int]] = [(node_id, 0)]
+        seen: Set[str] = {node_id}
+        reasons: List[str] = []
+        depth_pruned = 0
+        stop = False
+
+        logger.info(
+            f"Searching albums under node {node_id} "
+            f"(query={query!r}, max_depth={max_depth}, max_folders={max_folders}, "
+            f"max_results={max_results})"
+        )
+
+        while frontier and not stop:
+            current_node_id, depth = frontier.pop(0)
+
+            if result.folders_scanned >= max_folders:
+                reasons.append(
+                    f"folder limit reached (scanned {max_folders}); "
+                    f"{len(frontier) + 1} folder(s) not searched"
+                )
+                stop = True
+                break
+
+            try:
+                children = self._fetch_node_children(
+                    current_node_id,
+                    extra_params=dict(self._ALBUM_EXPAND_PARAMS),
+                    log_level=logging.DEBUG
+                )
+            except Exception as e:
+                logger.warning(f"Could not list node {current_node_id}, skipping: {e}")
+                result.errors.append(f"{current_node_id}: {e}")
+                continue
+
+            result.folders_scanned += 1
+            result.max_depth_reached = max(result.max_depth_reached, depth)
+
+            for child in children:
+                try:
+                    entry = BrowseNode.from_api_response(child)
+                except Exception as e:
+                    logger.warning(f"Skipping unreadable child of {current_node_id}: {e}")
+                    result.errors.append(f"child of {current_node_id}: {e}")
+                    continue
+                if entry is None:
+                    continue
+
+                if entry.is_folder:
+                    if entry.node_id in seen:
+                        continue
+                    if depth >= max_depth:
+                        # Pruned by max_depth. This is truncation: albums below
+                        # here exist and were never looked at.
+                        depth_pruned += 1
+                        continue
+                    seen.add(entry.node_id)
+                    frontier.append((entry.node_id, depth + 1))
+                    continue
+
+                if search_term and not self._album_matches(entry, search_term, exact_match):
+                    continue
+
+                if len(result.albums) >= max_results:
+                    reasons.append(f"result limit reached ({max_results} albums)")
+                    stop = True
+                    break
+                result.albums.append(entry)
+
+        if depth_pruned:
+            reasons.append(
+                f"depth limit reached (max_depth={max_depth}); "
+                f"{depth_pruned} subfolder(s) not searched"
+            )
+        if reasons:
+            result.truncated = True
+            result.truncation_reason = "; ".join(reasons)
+
+        if result.truncated:
+            logger.warning(
+                f"Album search under node {node_id} was TRUNCATED and is INCOMPLETE: "
+                f"{result.truncation_reason}. Found {len(result.albums)} album(s) in "
+                f"{result.folders_scanned} folder(s)."
+            )
+        else:
+            logger.info(
+                f"Album search complete: {len(result.albums)} album(s) in "
+                f"{result.folders_scanned} folder(s), depth {result.max_depth_reached}"
+            )
+        if result.errors:
+            logger.warning(f"{len(result.errors)} node(s) could not be listed during search")
+
+        return result
+
+    @staticmethod
+    def _album_matches(album: BrowseNode, search_term: str, exact_match: bool) -> bool:
+        """Test an album against a lowercased search term.
+
+        Args:
+            album: Album entry to test
+            search_term: Already-lowercased search term
+            exact_match: If True, require equality rather than containment
+
+        Returns:
+            True if the album's name or URL name matches
+        """
+        candidates = [album.name.lower(), (album.url_name or "").lower()]
+        if exact_match:
+            return any(c == search_term for c in candidates)
+        return any(search_term in c for c in candidates)
+
     def find_albums_by_name(
         self,
         node_id: str,
@@ -550,6 +935,66 @@ class SmugMugClient:
         logger.debug(f"Retrieved album: {album.name} ({album.image_count} images)")
         return album
     
+    def get_album_image_keywords(self, album_key: str) -> List[List[str]]:
+        """Get just the keywords of an album's images, one list of tags per image.
+
+        A deliberately cheap alternative to :meth:`get_album_images` for callers that
+        only need to know what is tagged - answering "has this album been processed?"
+        should not pay for every image's download URLs and size variants.
+        ``_filter`` restricts the response to three fields, which measured ~0.24s for a
+        13-image album against ~1s for the full expansion.
+
+        Videos are omitted, matching what the processing pipeline considers an image.
+
+        Args:
+            album_key: Album key (unique identifier)
+
+        Returns:
+            List with one entry per non-video image, each the tags on that image
+            (already split, so a semicolon-joined blob arrives as separate tags)
+
+        Raises:
+            SmugMugAPIError: If request fails
+        """
+        logger.debug(f"Fetching keywords for album: {album_key}")
+
+        per_image: List[List[str]] = []
+        current_start = 1
+
+        while True:
+            response = self._request(
+                "GET",
+                f"/album/{album_key}!images",
+                params={
+                    "start": current_start,
+                    "count": 100,
+                    # KeywordArray is SmugMug's own split of the keyword string; Keywords
+                    # is the raw blob, kept as a fallback for images that predate it.
+                    "_filter": "KeywordArray,Keywords,IsVideo",
+                },
+            )
+
+            response_data = response.get("Response", {})
+            images_data = response_data.get("AlbumImage", [])
+            if not images_data:
+                break
+
+            for image_data in images_data:
+                if image_data.get("IsVideo"):
+                    continue
+                raw = image_data.get("KeywordArray")
+                if not raw:
+                    raw = [image_data.get("Keywords") or ""]
+                per_image.append(split_keywords(raw))
+
+            if not response_data.get("Pages", {}).get("NextPage"):
+                break
+
+            current_start += len(images_data)
+
+        logger.debug(f"Album {album_key}: read keywords for {len(per_image)} image(s)")
+        return per_image
+
     def get_album_images(
         self,
         album_key: str,
@@ -702,7 +1147,8 @@ class SmugMugClient:
         Args:
             image: AlbumImage object (can also be a video)
             destination: Destination directory path
-            size: Image size (Medium, Large, XLarge, X2Large, X3Large, Original, etc.)
+            size: Image size (Medium, Large, XLarge, X2Large, X3Large, Original, etc.).
+                  Matched case-insensitively, so "medium" and "Medium" both work.
                   Note: For videos, only Original is supported
             skip_if_exists: If True, skip download if file already exists
             
@@ -776,10 +1222,15 @@ class SmugMugClient:
                             response_data = sizes_response.get("Response", sizes_response)
                             sizes_data = response_data.get("ImageSizes", {})
                             
-                            # Try to find the requested size
-                            size_key = f"{size}ImageUrl"
-                            if size_key in sizes_data:
-                                download_url = sizes_data[size_key]
+                            # Try to find the requested size. SmugMug's keys are
+                            # capitalized ("MediumImageUrl") while the configured size
+                            # is commonly lowercase ("medium"), so match case-insensitively.
+                            size_key = f"{size}ImageUrl".lower()
+                            matched_key = next(
+                                (k for k in sizes_data if k.lower() == size_key), None
+                            )
+                            if matched_key:
+                                download_url = sizes_data[matched_key]
                             # Fall back to LargestImageUrl if requested size not available
                             elif "LargestImageUrl" in sizes_data:
                                 logger.warning(f"Size '{size}' not available for {image.file_name}, using Largest")
@@ -788,7 +1239,7 @@ class SmugMugClient:
                             logger.warning(f"Could not fetch image sizes: {e}")
             
             # For Original size, try ArchivedUri as fallback
-            if not download_url and size == "Original" and image.archived_uri:
+            if not download_url and size.lower() == "original" and image.archived_uri:
                 download_url = image.archived_uri
             
             # Last resort: try the largest available size from image metadata

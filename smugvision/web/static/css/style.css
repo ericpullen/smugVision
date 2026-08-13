@@ -1,367 +1,2268 @@
-/* smugVision Web UI Custom Styles */
+/*
+ * smugVision Web UI
+ * ------------------------------------------------------------------
+ * Self-contained: no CDN, no web fonts, no framework. This file is the
+ * whole design system (it replaces the Pico CSS that used to be loaded
+ * from a CDN, which broke the offline requirement).
+ *
+ * The metaphor is a photo archivist's proof sheet: warm paper ground,
+ * ink text, frames on a dark mat, a caption "slip" under each frame,
+ * and a darkroom SAFELIGHT red reserved exclusively for the one action
+ * that writes to SmugMug.
+ */
 
-/* Utility classes */
+/* ==================================================================
+   1. Tokens
+   ================================================================== */
+
+:root {
+    /* Surfaces: one hue (warm neutral), lightness shifts only. */
+    --paper: #f7f5f1;          /* page ground - photographic paper */
+    --paper-2: #fffefb;        /* raised card */
+    --paper-3: #fffdf9;        /* raised above a card (dialog, popover) */
+    --slip: #f1eee7;           /* inset: caption slips, inputs, wells */
+    --mat: #26241f;            /* dark mat a frame sits on */
+
+    /* Ink: four levels, used deliberately. */
+    --ink: #22201c;            /* primary text */
+    --ink-2: #55514a;          /* supporting text */
+    --ink-3: #837d73;          /* metadata */
+    --ink-4: #a9a29a;          /* placeholder / disabled */
+
+    /* Rules: borders disappear until you look for them. */
+    --rule: rgba(34, 32, 28, 0.11);
+    --rule-soft: rgba(34, 32, 28, 0.06);
+    --rule-strong: rgba(34, 32, 28, 0.22);
+
+    /* Accent: the cool blue of a light table, against warm paper. */
+    --accent: #2f6f93;
+    --accent-strong: #235a78;
+    --accent-wash: rgba(47, 111, 147, 0.10);
+    --accent-ink: #1d4c66;
+
+    /* Safelight: darkroom red. ONLY the SmugMug write path uses this. */
+    --safelight: #a8331f;
+    --safelight-strong: #8a2817;
+    --safelight-wash: #fbeeea;
+    --safelight-ink: #7d2313;
+
+    /* Semantic diff colours, warmed to sit on paper. */
+    --added: #eaf3e6;
+    --added-ink: #2f6135;
+    --added-rule: rgba(47, 97, 53, 0.28);
+    --removed: #fbeae7;
+    --removed-ink: #8d3226;
+    --removed-rule: rgba(141, 50, 38, 0.26);
+    --caution: #8a5a12;
+    --caution-wash: #fbf2e0;
+
+    /* Spacing: 4px base. */
+    --s1: 0.25rem;
+    --s2: 0.5rem;
+    --s3: 0.75rem;
+    --s4: 1rem;
+    --s5: 1.5rem;
+    --s6: 2rem;
+    --s7: 3rem;
+
+    /* Radius: sharpish = archival/technical. */
+    --r-sm: 3px;
+    --r-md: 6px;
+    --r-lg: 10px;
+
+    /* Type. System stacks only - nothing is downloaded.
+       Sans for chrome, serif for the machine's prose (it is destined for
+       an archive, so it is set as content, not as UI), mono for keys. */
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    --font-prose: Georgia, "Iowan Old Style", "Times New Roman", Times, serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+        "Liberation Mono", monospace;
+
+    --focus: 0 0 0 3px rgba(47, 111, 147, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        /* The darkroom at night: same hue family, inverted lightness. */
+        --paper: #181713;
+        --paper-2: #201f1a;
+        --paper-3: #272620;
+        --slip: #12110e;
+        --mat: #0d0c0a;
+
+        --ink: #edeae3;
+        --ink-2: #b8b3a9;
+        --ink-3: #8d887e;
+        --ink-4: #6b665e;
+
+        --rule: rgba(237, 234, 227, 0.13);
+        --rule-soft: rgba(237, 234, 227, 0.07);
+        --rule-strong: rgba(237, 234, 227, 0.26);
+
+        --accent: #6fa8c7;
+        --accent-strong: #8cbcd7;
+        --accent-wash: rgba(111, 168, 199, 0.14);
+        --accent-ink: #a8cde0;
+
+        --safelight: #d9553c;
+        --safelight-strong: #e86a51;
+        --safelight-wash: #2b1712;
+        --safelight-ink: #f0a08c;
+
+        --added: #1b2a1c;
+        --added-ink: #93c79a;
+        --added-rule: rgba(147, 199, 154, 0.3);
+        --removed: #2c1a17;
+        --removed-ink: #dd9b8e;
+        --removed-rule: rgba(221, 155, 142, 0.3);
+        --caution: #d8ab5e;
+        --caution-wash: #2a2213;
+
+        --focus: 0 0 0 3px rgba(111, 168, 199, 0.4);
+    }
+}
+
+/* ==================================================================
+   2. Base elements  (this is what Pico used to provide)
+   ================================================================== */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+}
+
+.container,
+.container-fluid {
+    width: 100%;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 var(--s5);
+}
+
+.container-fluid {
+    max-width: none;
+}
+
+main.container {
+    padding-top: var(--s5);
+    padding-bottom: var(--s7);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+    margin: 0 0 var(--s2);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    font-weight: 650;
+    color: var(--ink);
+    overflow-wrap: break-word;
+}
+
+h1 {
+    font-size: 1.6rem;
+    letter-spacing: -0.02em;
+}
+
+h2 {
+    font-size: 1.3rem;
+}
+
+h3 {
+    font-size: 1.1rem;
+}
+
+h4 {
+    font-size: 0.95rem;
+}
+
+p {
+    margin: 0 0 var(--s3);
+}
+
+p:last-child {
+    margin-bottom: 0;
+}
+
+a {
+    color: var(--accent-ink);
+    text-decoration-color: var(--rule-strong);
+    text-underline-offset: 2px;
+}
+
+a:hover {
+    text-decoration-color: currentColor;
+}
+
+small {
+    font-size: 0.82rem;
+}
+
+code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--slip);
+    border: 1px solid var(--rule-soft);
+    border-radius: var(--r-sm);
+    padding: 0.1em 0.35em;
+    overflow-wrap: anywhere;
+}
+
+hr {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: var(--s5) 0;
+}
+
+/* Cards. Depth strategy: border + surface shift. No drop shadows -
+   archival paper does not float. The dialog is the one exception. */
+article {
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: var(--s5);
+    margin: 0 0 var(--s5);
+}
+
+article > header {
+    margin-bottom: var(--s4);
+}
+
+article > header > :last-child {
+    margin-bottom: 0;
+}
+
+article > header p {
+    color: var(--ink-2);
+    font-size: 0.92rem;
+}
+
+article > footer {
+    margin-top: var(--s4);
+    padding-top: var(--s3);
+    border-top: 1px solid var(--rule-soft);
+}
+
+/* --- Site chrome ------------------------------------------------- */
+
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    background: var(--paper-3);
+    color: var(--ink);
+    padding: var(--s2) var(--s4);
+    border: 1px solid var(--rule-strong);
+    border-radius: 0 0 var(--r-sm) 0;
+}
+
+.skip-link:focus {
+    left: 0;
+}
+
+.site-nav {
+    border-bottom: 1px solid var(--rule);
+    background: var(--paper);
+}
+
+.site-nav .container {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s4);
+    padding-top: var(--s3);
+    padding-bottom: var(--s3);
+}
+
+.site-nav .brand {
+    font-weight: 700;
+    font-size: 1.02rem;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.4em;
+}
+
+.site-nav .brand .brand-mark {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-sm);
+    padding: 0.1em 0.4em;
+}
+
+.site-nav ul {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s1);
+    list-style: none;
+    margin: 0 0 0 auto;
+    padding: 0;
+}
+
+.site-nav ul a {
+    display: block;
+    padding: var(--s1) var(--s3);
+    border-radius: var(--r-sm);
+    font-size: 0.9rem;
+    color: var(--ink-2);
+    text-decoration: none;
+}
+
+.site-nav ul a:hover {
+    background: var(--slip);
+    color: var(--ink);
+}
+
+.site-nav ul a[aria-current="page"] {
+    background: var(--accent-wash);
+    color: var(--accent-ink);
+    font-weight: 600;
+}
+
+.site-footer {
+    border-top: 1px solid var(--rule-soft);
+    padding-top: var(--s4);
+    padding-bottom: var(--s5);
+    color: var(--ink-3);
+}
+
+/* --- Forms ------------------------------------------------------- */
+
+label {
+    display: block;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: var(--s1);
+}
+
+.field {
+    margin-bottom: var(--s4);
+}
+
+/* Text fields stop at a readable measure instead of stretching the full
+   width of a wide card. Inside a narrow card they still fill it. */
+.field input[type="text"],
+.field input[type="url"],
+.field textarea {
+    max-width: 52rem;
+}
+
+.field-hint {
+    font-size: 0.82rem;
+    color: var(--ink-3);
+    margin: var(--s1) 0 0;
+    font-weight: 400;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="search"],
+textarea {
+    /* Inputs are inset: darker than their surroundings, not lighter. */
+    display: block;
+    width: 100%;
+    font-family: inherit;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: var(--ink);
+    background: var(--slip);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-sm);
+    padding: 0.5rem 0.65rem;
+}
+
+textarea {
+    resize: vertical;
+    min-height: 4.5rem;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--ink-4);
+}
+
+input[type="text"]:hover,
+input[type="url"]:hover,
+textarea:hover {
+    border-color: var(--rule-strong);
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+    accent-color: var(--accent);
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    flex: none;
+}
+
+.check {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s2);
+    font-weight: 400;
+    font-size: 0.92rem;
+    color: var(--ink);
+    margin-bottom: 0;
+    cursor: pointer;
+}
+
+.check input {
+    margin-top: 0.28em;
+}
+
+.check .check-note {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--ink-3);
+}
+
+/* --- Buttons ----------------------------------------------------- */
+
+button {
+    font-family: inherit;
+    font-size: 0.92rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: #fff;
+    background: var(--accent);
+    border: 1px solid var(--accent-strong);
+    border-radius: var(--r-sm);
+    padding: 0.45rem 0.9rem;
+    cursor: pointer;
+    transition: background 120ms ease-out, border-color 120ms ease-out,
+        color 120ms ease-out;
+}
+
+button:hover:not(:disabled) {
+    background: var(--accent-strong);
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+button.primary-lg {
+    font-size: 1rem;
+    padding: 0.6rem 1.25rem;
+}
+
+button.secondary {
+    color: var(--ink);
+    background: var(--paper-2);
+    border-color: var(--rule-strong);
+}
+
+button.secondary:hover:not(:disabled) {
+    background: var(--slip);
+}
+
+button.quiet {
+    color: var(--ink-2);
+    background: transparent;
+    border-color: transparent;
+    font-weight: 500;
+}
+
+button.quiet:hover:not(:disabled) {
+    background: var(--slip);
+    color: var(--ink);
+}
+
+button.danger {
+    color: #fff;
+    background: var(--safelight);
+    border-color: var(--safelight-strong);
+}
+
+button.danger:hover:not(:disabled) {
+    background: var(--safelight-strong);
+}
+
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s3);
+}
+
+/* Busy spinner: Pico gave us [aria-busy]; this replaces it. */
+[aria-busy="true"] {
+    position: relative;
+}
+
+button[aria-busy="true"] {
+    color: transparent;
+}
+
+button[aria-busy="true"]::after,
+.spinner::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0.95em;
+    height: 0.95em;
+    margin: -0.475em 0 0 -0.475em;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 640ms linear infinite;
+}
+
+button[aria-busy="true"]::after {
+    border-color: #fff;
+    border-right-color: transparent;
+}
+
+button.secondary[aria-busy="true"]::after,
+button.quiet[aria-busy="true"]::after {
+    border-color: var(--ink-2);
+    border-right-color: transparent;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    button[aria-busy="true"]::after,
+    .spinner::after {
+        animation-duration: 2s;
+    }
+
+    * {
+        transition-duration: 0ms !important;
+    }
+}
+
+progress {
+    display: block;
+    width: 100%;
+    height: 0.5rem;
+    appearance: none;
+    border: 0;
+    border-radius: 999px;
+    background: var(--slip);
+    overflow: hidden;
+}
+
+progress::-webkit-progress-bar {
+    background: var(--slip);
+}
+
+progress::-webkit-progress-value {
+    background: var(--accent);
+    transition: width 200ms ease-out;
+}
+
+progress::-moz-progress-bar {
+    background: var(--accent);
+}
+
+dl {
+    margin: 0;
+}
+
+/* ==================================================================
+   3. Utilities
+   ================================================================== */
+
 .hidden {
     display: none !important;
 }
 
-/* Status colors */
+.visually-hidden {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85em;
+}
+
+.muted {
+    color: var(--ink-3);
+}
+
+.eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 var(--s2);
+}
+
 .status-ok {
-    color: #22c55e;
+    color: var(--added-ink);
 }
 
 .status-warn {
-    color: #f59e0b;
+    color: var(--caution);
 }
 
 .status-error {
-    color: #ef4444;
+    color: var(--removed-ink);
 }
 
 .status-info {
-    color: #6b7280;
+    color: var(--ink-3);
 }
 
-/* Progress and status section */
-#status-section {
-    margin-top: 1rem;
-    padding: 1rem;
-    background: var(--pico-card-background-color);
-    border-radius: var(--pico-border-radius);
+.notice {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--ink-3);
+    border-radius: var(--r-sm);
+    background: var(--slip);
+    padding: var(--s3) var(--s4);
+    font-size: 0.9rem;
+    color: var(--ink-2);
 }
 
-#status-section h3 {
-    margin-bottom: 0.5rem;
+.notice.error {
+    background: var(--removed);
+    border-color: var(--removed-rule);
+    border-left-color: var(--safelight);
+    color: var(--removed-ink);
 }
 
-#status-section progress {
-    width: 100%;
-    margin-bottom: 0.5rem;
+.notice.caution {
+    background: var(--caution-wash);
+    border-color: rgba(138, 90, 18, 0.25);
+    border-left-color: var(--caution);
+    color: var(--caution);
 }
 
-/* Error section */
-#error-section {
-    background: #fee2e2;
-    border: 1px solid #ef4444;
-    color: #b91c1c;
-    padding: 1rem;
-    border-radius: var(--pico-border-radius);
-    margin-top: 1rem;
+/* Used for the write confirmation carried back to the picker. Green because it is the
+   one notice that reports something good having already happened. */
+.notice.ok {
+    background: var(--added);
+    border-color: var(--added-rule);
+    border-left-color: var(--added-ink);
+    color: var(--added-ink);
 }
 
-#error-section h4 {
-    color: #b91c1c;
-    margin-bottom: 0.5rem;
+.notice h4 {
+    color: inherit;
+    margin-bottom: var(--s1);
 }
 
-/* Service status */
-#service-status dl {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.5rem 1rem;
-    margin: 0;
+/* Way back to the picker, kept quiet: it sits under the album title and must not
+   compete with it. */
+.back-link {
+    margin: var(--s2) 0 0;
+    font-size: 0.85rem;
 }
 
-#service-status dt {
-    font-weight: 600;
-}
-
-#service-status dd {
-    margin: 0;
-}
-
-/* Stats cards */
-.stat-card {
+.info-box {
     text-align: center;
-    padding: 1rem;
-    background: var(--pico-card-background-color);
-    border-radius: var(--pico-border-radius);
-}
-
-.stat-card strong {
-    display: block;
-    font-size: 2rem;
-    color: var(--pico-primary);
-}
-
-/* Image grid */
-.image-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-    gap: 1rem;
-    margin-top: 1rem;
-}
-
-/* Image card */
-.image-card {
-    position: relative;
-    padding: 1rem;
+    padding: var(--s6) var(--s5);
+    background: var(--slip);
+    border: 1px dashed var(--rule-strong);
+    border-radius: var(--r-md);
+    color: var(--ink-2);
     margin: 0;
 }
 
-.image-card.skipped {
-    opacity: 0.6;
-    background: var(--pico-muted-border-color);
+/* ==================================================================
+   4. Gallery browser (landing page)
+   ================================================================== */
+
+.browser-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s3);
+    margin-bottom: var(--s3);
 }
 
-.image-card.error {
-    border-left: 4px solid #ef4444;
+/* Breadcrumb as an archive path, set in mono like a shelf mark. */
+.crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    min-width: 0;
+    flex: 1 1 20rem;
 }
 
-.image-card.processed {
-    border-left: 4px solid #22c55e;
+.crumbs li {
+    display: flex;
+    align-items: center;
+    min-width: 0;
 }
 
-/* Status badge */
-.status-badge {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.5rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
+.crumbs li + li::before {
+    content: "/";
+    color: var(--ink-4);
+    padding: 0 0.15rem;
+    flex: none;
 }
 
-.status-badge.processed {
-    background: #dcfce7;
-    color: #166534;
+.crumbs button {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--accent-ink);
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: 500;
+    padding: 0.15rem 0.35rem;
+    border-radius: var(--r-sm);
+    max-width: 16rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.status-badge.skipped {
-    background: #f3f4f6;
-    color: #6b7280;
+.crumbs button:hover:not(:disabled) {
+    background: var(--accent-wash);
 }
 
-.status-badge.error {
-    background: #fee2e2;
-    color: #b91c1c;
+.crumbs [aria-current="page"] {
+    color: var(--ink);
+    font-weight: 700;
+    padding: 0.15rem 0.35rem;
+    max-width: 22rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-/* Thumbnail */
-.thumbnail {
+/* The catalog: one honestly-lazy level of the tree. */
+.catalog {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    background: var(--paper-2);
+}
+
+.catalog li + li {
+    border-top: 1px solid var(--rule-soft);
+}
+
+.catalog-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s3);
     width: 100%;
-    max-width: 200px;
-    height: auto;
-    aspect-ratio: 1;
-    object-fit: cover;
-    border-radius: var(--pico-border-radius);
-    margin-bottom: 0.5rem;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    padding: var(--s3) var(--s4);
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--ink);
 }
 
-.skipped .thumbnail {
-    filter: grayscale(50%);
+.catalog-row:hover:not(:disabled) {
+    background: var(--slip);
 }
 
-/* Card content */
-.card-content {
+.catalog-row:focus-visible {
+    outline-offset: -2px;
+}
+
+/* Folders and albums are different KINDS of row, not the same row twice. */
+.catalog-row .kind {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-sm);
+    padding: 0.1rem 0.35rem;
+    position: relative;
+    top: -0.05em;
+}
+
+.catalog-row.is-album .kind {
+    color: var(--accent-ink);
+    border-color: var(--accent-wash);
+    background: var(--accent-wash);
+}
+
+.catalog-row .row-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.catalog-row .row-meta {
+    flex: none;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
+    color: var(--ink-3);
+}
+
+/* "Have I proofed this one?" - answered per album, after the list is drawn.
+   Deliberately quieter than the album name: it is a status, not the row's subject. */
+.catalog-row .row-proof {
+    flex: none;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.7rem;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    border-radius: var(--r-sm);
+    padding: 0.1rem 0.4rem;
+    color: var(--ink-4);
+}
+
+/* The states worth noticing carry colour; "not proofed" is the ordinary case and
+   stays muted so a folder of fresh albums does not light up. */
+.catalog-row .row-proof.is-proofed {
+    color: var(--added-ink);
+    background: color-mix(in srgb, var(--added-ink) 12%, transparent);
+}
+
+.catalog-row .row-proof.is-partial {
+    color: var(--caution);
+    background: var(--caution-wash);
+}
+
+.catalog-row .row-proof.is-checking {
+    opacity: 0.7;
+}
+
+.catalog-row .row-proof.is-unknown {
+    cursor: help;
+    text-decoration: underline dotted;
+}
+
+.catalog-row .row-go {
+    flex: none;
+    color: var(--ink-4);
     font-size: 0.9rem;
 }
 
-.card-content h4 {
-    margin-bottom: 0.5rem;
-    font-size: 1rem;
-    word-break: break-word;
+.catalog-row.is-album[aria-pressed="true"] {
+    background: var(--accent-wash);
 }
 
-/* Diff styling */
-.diff-section {
-    margin-bottom: 0.75rem;
+.catalog-row.is-empty .row-meta {
+    color: var(--ink-4);
 }
 
-.diff-section > strong {
+.catalog-row.is-big .row-meta {
+    color: var(--caution);
+    font-weight: 600;
+}
+
+/* Loading / empty states for the catalog. */
+.catalog-loading {
+    padding: var(--s5) var(--s4);
+}
+
+.skeleton-row {
+    height: 0.85rem;
+    border-radius: var(--r-sm);
+    background: linear-gradient(
+        90deg,
+        var(--slip) 0%,
+        var(--rule-soft) 50%,
+        var(--slip) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+    margin-bottom: var(--s3);
+}
+
+.skeleton-row:nth-child(2) {
+    width: 70%;
+}
+
+.skeleton-row:nth-child(3) {
+    width: 85%;
+}
+
+.skeleton-row:nth-child(4) {
+    width: 55%;
+    margin-bottom: 0;
+}
+
+@keyframes shimmer {
+    to {
+        background-position: -200% 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .skeleton-row {
+        animation: none;
+    }
+}
+
+/* --- The selected album + the safe run action -------------------- */
+
+.selection {
+    border: 1px solid var(--accent-wash);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-md);
+    background: var(--accent-wash);
+    padding: var(--s4);
+    margin-top: var(--s5);
+}
+
+.selection h3 {
+    margin-bottom: var(--s1);
+    overflow-wrap: anywhere;
+}
+
+.selection .selection-meta {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-2);
+    margin-bottom: var(--s4);
+}
+
+.run-modes {
+    border: 0;
+    margin: 0 0 var(--s4);
+    padding: 0;
+}
+
+.run-modes legend {
+    font-size: 0.88rem;
+    font-weight: 600;
+    padding: 0;
+    margin-bottom: var(--s2);
+}
+
+.run-mode {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s2);
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-sm);
+    padding: var(--s3);
+    margin-bottom: var(--s2);
+    font-weight: 400;
+    cursor: pointer;
+}
+
+.run-mode input {
+    margin-top: 0.3em;
+}
+
+.run-mode .run-mode-title {
+    font-weight: 600;
+    font-size: 0.92rem;
     display: block;
-    font-size: 0.8rem;
-    color: var(--pico-muted-color);
-    margin-bottom: 0.25rem;
 }
 
-.diff-container {
-    font-size: 0.85rem;
-    line-height: 1.4;
+.run-mode .run-mode-note {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--ink-3);
 }
 
-.diff-removed {
-    background: #fee2e2;
-    color: #b91c1c;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    margin-bottom: 0.25rem;
-    text-decoration: line-through;
-    opacity: 0.8;
+.run-mode:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--paper-3);
 }
 
-.diff-added {
-    background: #dcfce7;
-    color: #166534;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
+/* The full-run mode is made of safelight, even as a radio option. */
+.run-mode.is-write:has(input:checked) {
+    border-color: var(--safelight);
+    background: var(--safelight-wash);
+}
+
+.run-mode.is-write .run-mode-title {
+    color: var(--safelight-ink);
+}
+
+.run-mode.is-write:has(input:checked) .run-mode-note {
+    color: var(--safelight-ink);
+}
+
+/* The dry-run promise, stated where the action is. */
+.dry-run-seal {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s2);
+    font-size: 0.82rem;
+    color: var(--added-ink);
+    background: var(--added);
+    border: 1px solid var(--added-rule);
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    font-weight: 600;
+}
+
+/* Progress block while a proof run streams. */
+.run-progress {
+    margin-top: var(--s4);
+    background: var(--slip);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: var(--s4);
+}
+
+.run-progress h3 {
+    font-size: 1rem;
+    margin-bottom: var(--s3);
+}
+
+.run-progress .progress-line {
+    margin: var(--s2) 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+}
+
+/* Paste-a-URL fallback, deliberately secondary. */
+.fallback {
+    margin-top: var(--s5);
+    border-top: 1px solid var(--rule-soft);
+    padding-top: var(--s4);
+}
+
+.fallback summary {
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--ink-2);
+    padding: var(--s1) 0;
+    border-radius: var(--r-sm);
+}
+
+.fallback summary:hover {
+    color: var(--ink);
+}
+
+.fallback[open] summary {
+    margin-bottom: var(--s3);
+}
+
+.fallback-body {
+    max-width: 44rem;
+}
+
+/* Service status list. */
+.status-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--s2) var(--s4);
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.status-list dt {
+    font-weight: 600;
+    color: var(--ink-2);
+}
+
+.status-list dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+/* ==================================================================
+   5. Proof sheet (preview page)
+   ================================================================== */
+
+.sheet-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--s4);
+    justify-content: space-between;
+}
+
+.sheet-head .album-key {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-3);
+}
+
+/* One inline tally instead of three hero stat boxes. */
+.tally {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--s4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.9rem;
+}
+
+.tally li {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    color: var(--ink-2);
+}
+
+.tally .tally-n {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--ink);
+}
+
+.tally li.is-zero .tally-n {
+    color: var(--ink-4);
+    font-weight: 500;
+}
+
+.tally li.processed .tally-n {
+    color: var(--added-ink);
+}
+
+.tally li.errors:not(.is-zero) .tally-n {
+    color: var(--removed-ink);
+}
+
+/* --- The grid of frames ----------------------------------------- */
+
+.image-grid {
+    display: grid;
+    /* min() keeps a narrow viewport from ever overflowing horizontally. */
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 23rem), 1fr));
+    gap: var(--s4);
+    margin: 0 0 var(--s5);
+    padding: 0;
+    list-style: none;
+}
+
+.image-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+}
+
+.image-card.processed {
+    border-top: 3px solid var(--added-rule);
+}
+
+.image-card.skipped {
+    border-top: 3px solid var(--rule-strong);
+}
+
+.image-card.error {
+    border-top: 3px solid var(--safelight);
+}
+
+/* The frame sits on a dark mat, contained not cropped, so nothing in
+   the photograph is hidden from the person judging the caption. */
+.frame {
+    position: relative;
+    background: var(--mat);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 12rem;
+}
+
+.frame img {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    display: block;
+}
+
+.image-card.skipped .frame img {
+    filter: grayscale(70%);
+    opacity: 0.75;
+}
+
+.frame-label {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s2);
+    padding: var(--s2) var(--s3);
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+    color: #f4f1ec;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+
+.frame-label .frame-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.frame-missing {
+    color: var(--ink-4);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: var(--s4);
+    text-align: center;
+}
+
+.status-badge {
+    flex: none;
+    border-radius: var(--r-sm);
+    padding: 0.05rem 0.35rem;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+}
+
+.status-badge.processed {
+    background: var(--added);
+    color: var(--added-ink);
+}
+
+.status-badge.skipped {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+}
+
+.status-badge.error {
+    background: var(--safelight);
+    color: #fff;
+}
+
+.card-body {
+    padding: var(--s4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s4);
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* The caption slip: an inset panel of archival prose. */
+.slip {
+    background: var(--slip);
+    border: 1px solid var(--rule-soft);
+    border-radius: var(--r-sm);
+    padding: var(--s3);
+}
+
+.slip-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 var(--s2);
+}
+
+.slip .caption-text {
+    font-family: var(--font-prose);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: var(--ink);
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.diff-line {
+    font-family: var(--font-prose);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    border-radius: var(--r-sm);
+    padding: var(--s2);
+    margin: 0 0 var(--s2);
+    overflow-wrap: anywhere;
+}
+
+.diff-line:last-child {
+    margin-bottom: 0;
+}
+
+.diff-line.removed {
+    background: var(--removed);
+    color: var(--removed-ink);
+    border: 1px solid var(--removed-rule);
+}
+
+.diff-line.added {
+    background: var(--added);
+    color: var(--added-ink);
+    border: 1px solid var(--added-rule);
+}
+
+.diff-line.unchanged {
+    color: var(--ink-2);
+    font-style: italic;
 }
 
 .no-change {
-    color: var(--pico-muted-color);
+    color: var(--ink-3);
     font-style: italic;
+    font-size: 0.88rem;
 }
 
-/* Keywords */
-.keywords-container {
+/* Tags */
+.tag-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.25rem;
+    gap: var(--s1);
 }
 
-.keyword-tag {
-    display: inline-block;
-    padding: 0.125rem 0.5rem;
-    background: var(--pico-secondary-background);
-    border-radius: 9999px;
+.tag {
     font-size: 0.75rem;
+    line-height: 1.5;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    background: var(--slip);
+    border: 1px solid var(--rule);
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
 }
 
-.keyword-tag.added {
-    background: #dcfce7;
-    color: #166534;
+.tag.added {
+    background: var(--added);
+    border-color: var(--added-rule);
+    color: var(--added-ink);
+    font-weight: 600;
 }
 
-.keyword-tag.removed {
-    background: #fee2e2;
-    color: #b91c1c;
+.tag.removed {
+    background: var(--removed);
+    border-color: var(--removed-rule);
+    color: var(--removed-ink);
     text-decoration: line-through;
 }
 
-/* Details section */
-.details-section {
-    margin-top: 0.75rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--pico-muted-border-color);
+/* What the pipeline saw: faces, location. Set as evidence, in mono. */
+.evidence {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.75rem;
-    font-size: 0.85rem;
+    gap: var(--s2) var(--s4);
+    font-size: 0.8rem;
+    color: var(--ink-2);
+    padding-top: var(--s3);
+    border-top: 1px solid var(--rule-soft);
 }
 
-.detail-item {
-    display: inline-flex;
+.evidence div {
+    min-width: 0;
+}
+
+.evidence .evidence-label {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: block;
+}
+
+.evidence .evidence-value {
+    overflow-wrap: anywhere;
+}
+
+.evidence .evidence-value.none {
+    color: var(--ink-4);
+}
+
+/* --- The margin note (per-image hint) --------------------------- */
+
+.margin-note {
+    border-top: 1px solid var(--rule);
+    margin-top: auto;
+    padding-top: var(--s3);
+}
+
+.margin-note label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s2);
+    font-size: 0.8rem;
+}
+
+.margin-note .scope-tag {
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-sm);
+    padding: 0.05rem 0.3rem;
+    font-weight: 600;
+}
+
+.margin-note textarea {
+    min-height: 3.6rem;
+    font-size: 0.88rem;
+}
+
+.margin-note .note-actions {
+    display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: var(--s3);
+    margin-top: var(--s2);
+    flex-wrap: wrap;
 }
 
-/* Skip reason and errors */
-.skip-reason {
-    color: var(--pico-muted-color);
-    font-style: italic;
-    margin-bottom: 0.5rem;
+.margin-note .note-status {
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    min-height: 1.2em;
+    flex: 1 1 8rem;
+    overflow-wrap: anywhere;
 }
 
-.existing-caption {
+.margin-note .note-status.error {
+    color: var(--removed-ink);
+}
+
+.margin-note .note-status.ok {
+    color: var(--added-ink);
+}
+
+/* Per-card busy veil: only the regenerating card dims. */
+.image-card.is-busy {
+    position: relative;
+}
+
+.image-card.is-busy .card-body,
+.image-card.is-busy .frame {
+    opacity: 0.45;
+}
+
+.card-veil {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s2);
+    background: rgba(247, 245, 241, 0.35);
+    z-index: 2;
+}
+
+@media (prefers-color-scheme: dark) {
+    .card-veil {
+        background: rgba(24, 23, 19, 0.45);
+    }
+}
+
+.card-veil .veil-text {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--ink);
+    background: var(--paper-3);
+    border: 1px solid var(--rule-strong);
+    border-radius: 999px;
+    padding: 0.3rem 0.8rem 0.3rem 1.9rem;
+    position: relative;
+}
+
+.card-veil .veil-text::after {
+    content: "";
+    position: absolute;
+    left: 0.7rem;
+    top: 50%;
+    width: 0.8em;
+    height: 0.8em;
+    margin-top: -0.4em;
+    border: 2px solid var(--ink-3);
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 640ms linear infinite;
+}
+
+/* ==================================================================
+   6. Hints
+   ================================================================== */
+
+.scope-card {
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    background: var(--paper-2);
+    padding: var(--s4);
+    margin-bottom: var(--s4);
+}
+
+.scope-card.global {
+    border-left: 3px solid var(--caution);
+}
+
+.scope-card.album {
+    border-left: 3px solid var(--accent);
+}
+
+.scope-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--s2);
+    margin-bottom: var(--s1);
+}
+
+.scope-head h3 {
     margin: 0;
+    font-size: 1rem;
 }
 
-.error-message {
-    color: #b91c1c;
-    background: #fee2e2;
-    padding: 0.5rem;
-    border-radius: 4px;
+.scope-badge {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border-radius: var(--r-sm);
+    padding: 0.1rem 0.4rem;
 }
 
-/* Commit section */
-#commit-section {
-    text-align: center;
-    margin-top: 1rem;
+.scope-badge.global {
+    background: var(--caution-wash);
+    color: var(--caution);
+    border: 1px solid rgba(138, 90, 18, 0.3);
 }
 
-#commit-section .help-text {
-    font-size: 0.85rem;
-    color: var(--pico-muted-color);
-    margin-top: 0.5rem;
+.scope-badge.album {
+    background: var(--accent-wash);
+    color: var(--accent-ink);
+    border: 1px solid var(--accent-wash);
 }
 
-#commit-btn.committed {
-    background: #22c55e;
-    border-color: #16a34a;
+.scope-badge.image {
+    background: var(--slip);
+    color: var(--ink-3);
+    border: 1px solid var(--rule);
 }
 
-/* Faces grid */
+.scope-reach {
+    font-size: 0.84rem;
+    color: var(--ink-2);
+    margin: 0 0 var(--s3);
+}
+
+.hint-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+}
+
+.hint-table th,
+.hint-table td {
+    text-align: left;
+    padding: var(--s2) var(--s3);
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+}
+
+.hint-table th {
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+}
+
+.hint-table td.key {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+.hint-table td.text {
+    overflow-wrap: anywhere;
+}
+
+.hint-table td.act {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* ==================================================================
+   7. The safelight: the ONLY thing that writes to SmugMug
+   ================================================================== */
+
+.safelight-panel {
+    margin: var(--s6) 0 var(--s5);
+    border: 1px solid var(--safelight);
+    border-top-width: 4px;
+    border-radius: var(--r-md);
+    background: var(--safelight-wash);
+    padding: var(--s5);
+}
+
+.safelight-panel > summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--safelight-ink);
+    font-size: 1rem;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+}
+
+.safelight-panel > summary::-webkit-details-marker {
+    display: none;
+}
+
+.safelight-panel > summary::before {
+    content: "";
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: var(--safelight);
+    box-shadow: 0 0 0 3px rgba(168, 51, 31, 0.18);
+    flex: none;
+}
+
+.safelight-panel[open] > summary {
+    margin-bottom: var(--s4);
+    padding-bottom: var(--s3);
+    border-bottom: 1px solid var(--removed-rule);
+}
+
+.safelight-panel h3 {
+    color: var(--safelight-ink);
+    margin-bottom: var(--s2);
+}
+
+.safelight-panel p {
+    color: var(--safelight-ink);
+    font-size: 0.9rem;
+    max-width: 52rem;
+}
+
+.safelight-panel .latch {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s2);
+    background: var(--paper-2);
+    border: 1px solid var(--removed-rule);
+    border-radius: var(--r-sm);
+    padding: var(--s3);
+    margin: var(--s4) 0;
+    font-weight: 500;
+    font-size: 0.92rem;
+    color: var(--ink);
+    cursor: pointer;
+    max-width: 52rem;
+}
+
+.safelight-panel .write-summary {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--safelight-ink);
+    margin-top: var(--s3);
+}
+
+/* Confirm dialog. The one element allowed a shadow: it really floats. */
+dialog {
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--r-lg);
+    background: var(--paper-3);
+    color: var(--ink);
+    padding: 0;
+    max-width: min(32rem, calc(100vw - 2rem));
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.22);
+}
+
+dialog::backdrop {
+    background: rgba(20, 18, 15, 0.55);
+}
+
+dialog .dialog-body {
+    padding: var(--s5);
+}
+
+dialog h3 {
+    margin-bottom: var(--s3);
+}
+
+dialog .dialog-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--s3);
+    margin-top: var(--s5);
+}
+
+/* Used both in the safelight panel and in the confirm dialog. */
+.write-list {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-sm);
+    padding: var(--s3);
+    margin: var(--s3) 0 0;
+    max-width: 52rem;
+    max-height: 9rem;
+    overflow-y: auto;
+    list-style: none;
+}
+
+.write-list:empty {
+    display: none;
+}
+
+.write-list li + li {
+    margin-top: 0.2rem;
+}
+
+dialog .write-list {
+    background: var(--slip);
+}
+
+dialog#confirm-write-modal {
+    border-color: var(--safelight);
+    border-top: 4px solid var(--safelight);
+}
+
+/* ==================================================================
+   8. Faces
+   ================================================================== */
+
 .faces-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr));
+    gap: var(--s4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
 }
 
 .face-card {
     text-align: center;
-    padding: 1rem;
+    padding: var(--s4) var(--s3);
     margin: 0;
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    min-width: 0;
 }
 
-.face-image {
-    width: 100px;
-    height: 100px;
-    object-fit: cover;
+.face-portrait {
+    width: 5.5rem;
+    height: 5.5rem;
+    margin: 0 auto var(--s3);
     border-radius: 50%;
-    margin-bottom: 0.5rem;
+    overflow: hidden;
+    background: var(--slip);
+    border: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.face-portrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* Initials fallback - replaces an inline SVG data URI so the assets
+   contain no URLs at all. */
+.face-portrait .initials {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--ink-4);
+    letter-spacing: 0.05em;
 }
 
 .face-card h4 {
-    margin-bottom: 0.25rem;
-    font-size: 1rem;
+    margin-bottom: var(--s1);
+    font-size: 0.92rem;
+    overflow-wrap: anywhere;
 }
 
 .reference-count {
-    font-size: 0.85rem;
-    color: var(--pico-muted-color);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--ink-3);
     margin: 0;
 }
 
-/* Graph container */
+/* ==================================================================
+   9. Relationship graph (local SVG renderer, no vis.js)
+   ================================================================== */
+
 #graph-container {
-    height: 500px;
-    border: 1px solid var(--pico-muted-border-color);
-    border-radius: var(--pico-border-radius);
-    background: var(--pico-card-background-color);
+    position: relative;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    background: var(--slip);
+    overflow: hidden;
 }
 
-/* Info box */
-.info-box {
-    text-align: center;
-    padding: 2rem;
-    background: var(--pico-card-background-color);
-    border-radius: var(--pico-border-radius);
+.graph-svg {
+    display: block;
+    width: 100%;
+    height: 460px;
+    touch-action: none;
 }
 
-.info-box code {
-    background: var(--pico-code-background-color);
-    padding: 0.125rem 0.375rem;
-    border-radius: 4px;
+.graph-edge {
+    stroke: var(--rule-strong);
+    stroke-width: 1.2;
 }
 
-/* Groups section */
+.graph-edge-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    fill: var(--ink-3);
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+}
+
+.graph-edge.is-highlight {
+    stroke: var(--accent);
+    stroke-width: 2.2;
+}
+
+.graph-edge-label.is-highlight {
+    opacity: 1;
+    fill: var(--accent-ink);
+    font-weight: 600;
+}
+
+.graph-node ellipse {
+    fill: var(--paper-2);
+    stroke: var(--accent);
+    stroke-width: 1.5;
+}
+
+.graph-node text {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    font-weight: 600;
+    fill: var(--ink);
+    text-anchor: middle;
+    /* Hit-testing belongs to the pill, so hover does not flicker between
+       the label and the shape behind it. */
+    pointer-events: none;
+    user-select: none;
+}
+
+.graph-node.is-active ellipse {
+    fill: var(--accent-wash);
+    stroke-width: 2.5;
+}
+
+.graph-caption {
+    font-size: 0.82rem;
+    color: var(--ink-3);
+    margin: var(--s2) 0 0;
+}
+
 #groups-section ul {
     margin: 0;
-    padding-left: 1.5rem;
+    padding-left: var(--s5);
 }
 
 #groups-section li {
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--s2);
 }
 
-/* Modal */
-dialog article {
-    max-width: 400px;
-}
+/* ==================================================================
+   10. Narrow viewports
+   ================================================================== */
 
-/* Responsive adjustments */
-@media (max-width: 768px) {
+@media (max-width: 760px) {
+    .container,
+    .container-fluid {
+        padding: 0 var(--s4);
+    }
+
+    article {
+        padding: var(--s4);
+    }
+
     .image-grid {
         grid-template-columns: 1fr;
     }
-    
-    .faces-grid {
-        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+
+    .sheet-head {
+        align-items: flex-start;
     }
-    
-    #graph-container {
-        height: 350px;
+
+    .graph-svg {
+        height: 340px;
     }
+
+    .site-nav .container {
+        gap: var(--s2);
+    }
+
+    .site-nav ul {
+        margin-left: 0;
+        width: 100%;
+    }
+}
+
+/* ---------------------------------------------------------------- *
+ * People picker: one checkbox per reference face, with its sample
+ * ---------------------------------------------------------------- */
+
+.people-picker {
+    border: 1px solid var(--line, #333);
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem 0.75rem;
+    margin: 0.5rem 0 0.35rem;
+}
+
+.people-picker legend {
+    padding: 0 0.35rem;
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    opacity: 0.75;
+}
+
+/* The pinned few, as tiles big enough to hit without aiming. Four across on a card,
+   more on a wide album panel. */
+.picker-pinned {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+}
+
+/* Everyone else keeps the old compact row: reachable, but not competing for attention. */
+.picker-drawer {
+    margin-top: 0.5rem;
+}
+
+.picker-drawer > summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    opacity: 0.75;
+}
+
+.picker-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: 0.35rem 0.75rem;
+    padding: 0.5rem 0 0.25rem;
+}
+
+.picker-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.picker-item label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.picker-item .picker-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.picker-face {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+    object-fit: cover;
+    flex: 0 0 auto;
+}
+
+.picker-item input:focus-visible + label {
+    outline: 2px solid var(--focus, #6cf);
+    outline-offset: 2px;
+}
+
+/* A ticked drawer row has to look ticked. The native checkbox carries most of that,
+   but the name changing weight and colour is what you notice while scanning a list of
+   twelve. */
+.picker-item:not(.is-tile) input:checked + label {
+    color: var(--accent-ink);
+    font-weight: 650;
+}
+
+.picker-item:not(.is-tile) input:checked + label .picker-face {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 1px;
+}
+
+/* --- Tiles in the top row ------------------------------------------------ */
+
+.picker-item.is-tile {
+    position: relative;
+    display: block;
+}
+
+.picker-item.is-tile label {
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.45rem 0.3rem 0.4rem;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    text-align: center;
+    /* The whole tile is the target, not just the 1rem checkbox it replaces. */
+    width: 100%;
+}
+
+.picker-item.is-tile label:hover {
+    background: var(--slip);
+}
+
+.picker-item.is-tile .picker-face {
+    width: 3.25rem;
+    height: 3.25rem;
+}
+
+.picker-item.is-tile .picker-name {
+    font-size: 0.78rem;
+    max-width: 100%;
+    /* Wrap rather than ellipsise: "Sam Rive..." is worse than two short lines,
+       and the equal-height labels below keep the row tidy when one name wraps. */
+    white-space: normal;
+    line-height: 1.25;
+}
+
+.picker-item.is-tile label {
+    height: 100%;
+    justify-content: flex-start;
+}
+
+/* Ticked has to be obvious at a glance across a row of similar faces, so it changes
+   the frame and the ground, not just a tick mark. */
+.picker-item.is-tile input:checked + label {
+    border-color: var(--accent-ink);
+    background: var(--accent-wash);
+    font-weight: 600;
+}
+
+.picker-item.is-tile input:checked + label .picker-face {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 2px;
+}
+
+/* --- Pin / unpin ------------------------------------------------- */
+
+.picker-star {
+    flex: none;
+    background: none;
+    border: 0;
+    padding: 0.1rem 0.2rem;
+    line-height: 1;
+    font-size: 0.9rem;
+    color: var(--ink-4);
+    cursor: pointer;
+}
+
+.picker-star:hover {
+    color: var(--caution);
+}
+
+.picker-star.is-on {
+    color: var(--caution);
+}
+
+/* On a tile the star sits in the corner rather than taking a column of its own. */
+.picker-item.is-tile .picker-star {
+    position: absolute;
+    top: 0.1rem;
+    right: 0.1rem;
+}
+
+.album-people-drawer > summary {
+    cursor: pointer;
+}
+
+/* --- Pets --------------------------------------------------------- *
+   A pet has no reference face, so there is no thumbnail to click: the name IS the
+   control. Chips rather than a checkbox list, because there are only ever a few. */
+.pet-picker {
+    margin-top: 0.5rem;
+}
+
+.pet-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+
+.pet-item label {
+    display: inline-block;
+    cursor: pointer;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    font-size: 0.85rem;
+    line-height: 1.2;
+}
+
+.pet-item label:hover {
+    background: var(--slip);
+}
+
+/* Same lesson as the drawer rows: a hidden checkbox needs the checked state drawn
+   somewhere, or ticking looks like nothing happened. */
+.pet-item input:checked + label {
+    border-color: var(--accent-ink);
+    background: var(--accent-wash);
+    color: var(--accent-ink);
+    font-weight: 650;
+}
+
+.pet-item input:focus-visible + label {
+    outline: 2px solid var(--focus, #6cf);
+    outline-offset: 2px;
+}
+
+/* --- Pets editor on the hints page ------------------------------- */
+
+.pet-list {
+    list-style: none;
+    margin: 0 0 var(--s4);
+    padding: 0;
+}
+
+.pet-list li {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s3);
+    padding: var(--s2) 0;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.pet-list .pet-name {
+    flex: none;
+    font-weight: 650;
+    min-width: 7rem;
+}
+
+/* A button that reads as a link, for an action that navigates the form rather than
+   doing something to the data. */
+.link-button {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    text-align: left;
+    color: var(--accent-ink);
+    text-decoration: underline;
+    text-decoration-color: var(--rule-strong);
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.link-button:hover {
+    text-decoration-color: currentColor;
+}
+
+.pet-list .pet-fact {
+    flex: 1 1 auto;
+    color: var(--ink-2);
+    font-size: 0.92rem;
+    overflow-wrap: anywhere;
+}
+
+/* An album-wide override affects every frame, so when one is set the drawer stops
+   looking like an empty optional extra. */
+.album-people-drawer.is-set > summary {
+    color: var(--caution);
+    font-weight: 600;
+}
+
+/* A proposed Title reads as a label, not prose, so it gets its own weight. */
+.diff-line.title-line {
+    font-weight: 600;
+    letter-spacing: 0.01em;
 }

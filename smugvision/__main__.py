@@ -102,7 +102,10 @@ Examples:
   
   # Force reprocess already-tagged images
   python -m smugvision --gallery abc123 --force-reprocess
-  
+
+  # Re-tag from scratch: replace the existing caption/keywords instead of merging
+  python -m smugvision --gallery abc123 --force-reprocess --no-preserve-existing --dry-run
+
   # Skip video files (default behavior)
   python -m smugvision --gallery abc123
   
@@ -149,7 +152,18 @@ For more information, visit: https://github.com/yourusername/smugvision
         action="store_true",
         help="Include video files in processing (default: skip videos)"
     )
-    
+    parser.add_argument(
+        "--preserve-existing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Merge into the existing caption and keywords (default, from "
+            "processing.preserve_existing). Use --no-preserve-existing to REPLACE them "
+            "instead; that discards any caption and keywords already on the image, "
+            "including ones you added by hand in SmugMug"
+        )
+    )
+
     # Configuration
     parser.add_argument(
         "--config",
@@ -326,7 +340,8 @@ def main() -> int:
         
         processor = ImageProcessor(
             config=config,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
+            preserve_existing=args.preserve_existing
         )
         
         if not args.quiet:
@@ -337,9 +352,23 @@ def main() -> int:
             else:
                 print("ℹ️  Face recognition: disabled")
             
+            if not processor.preserve_existing:
+                print(
+                    "ℹ️  Replacing existing caption/keywords "
+                    "(not merging into them)"
+                )
+
             if args.dry_run:
                 print("⚠️  DRY RUN MODE - No changes will be made to SmugMug")
-            
+            elif not processor.preserve_existing:
+                # Writing with preserve_existing off discards whatever is already on
+                # the image, including hand-added keywords. Not recoverable.
+                print(
+                    "⚠️  WARNING: existing captions and keywords will be OVERWRITTEN "
+                    "on SmugMug and cannot be recovered."
+                )
+                print("    Re-run with --dry-run first if you have not previewed this.")
+
             print()
             print("-" * 70)
             print(f"Processing album: {album_key}")

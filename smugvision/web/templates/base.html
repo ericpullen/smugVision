@@ -4,36 +4,59 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}smugVision{% endblock %}</title>
-    
-    <!-- Pico CSS for minimal styling -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-    
-    <!-- Custom styles -->
+
+    {# Every asset is served from this app. No CDN, no web fonts: the UI
+       works with no internet connection, which matters because the whole
+       pipeline (Ollama, face recognition) already runs locally. #}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    
+
+    {# An empty inline icon. The app serves no /favicon.ico, and without this
+       every page load logs a 404 in the browser console. #}
+    <link rel="icon" href="data:,">
+
     {% block head %}{% endblock %}
 </head>
 <body>
-    <nav class="container-fluid">
-        <ul>
-            <li><strong><a href="/">smugVision</a></strong></li>
-        </ul>
-        <ul>
-            <li><a href="/">Process Album</a></li>
-            <li><a href="/faces">Known Faces</a></li>
-            <li><a href="/relationships">Relationships</a></li>
-        </ul>
+    <a class="skip-link" href="#main">Skip to main content</a>
+
+    {# Current-page marking is derived from the request path so no route has
+       to pass a flag in. /preview/<job_id> counts as part of Albums. #}
+    {% set path = request.path %}
+    <nav class="site-nav" aria-label="Main">
+        <div class="container">
+            <a class="brand" href="/">smugVision<span class="brand-mark">proof</span></a>
+            <ul>
+                <li>
+                    <a href="/"
+                       {% if path == '/' or path.startswith('/preview/') %}aria-current="page"{% endif %}>Albums</a>
+                </li>
+                <li>
+                    <a href="/hints"
+                       {% if path.startswith('/hints') %}aria-current="page"{% endif %}>Hints</a>
+                </li>
+                <li>
+                    <a href="/faces"
+                       {% if path.startswith('/faces') %}aria-current="page"{% endif %}>Known Faces</a>
+                </li>
+                <li>
+                    <a href="/relationships"
+                       {% if path.startswith('/relationships') %}aria-current="page"{% endif %}>Relationships</a>
+                </li>
+            </ul>
+        </div>
     </nav>
-    
-    <main class="container">
+
+    <main class="container" id="main">
         {% block content %}{% endblock %}
     </main>
-    
-    <footer class="container">
-        <small>smugVision - AI-powered photo metadata generation</small>
+
+    <footer class="container site-footer">
+        <small>
+            smugVision &mdash; captions and keywords from a local vision model.
+            Nothing is written to SmugMug until you confirm a write.
+        </small>
     </footer>
-    
-    <!-- Custom JavaScript -->
+
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>

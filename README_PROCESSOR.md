@@ -6,13 +6,19 @@ The `ImageProcessor` is the core orchestration module that ties together all smu
 
 The processor handles the complete pipeline:
 
-1. **Download** - Fetches images from SmugMug to local cache
-2. **Extract** - Pulls EXIF data (GPS, date, camera info)
-3. **Detect** - Identifies faces using face recognition
-4. **Analyze** - Generates captions and tags using AI vision model
-5. **Format** - Combines AI output with EXIF data and person names
-6. **Update** - Pushes metadata back to SmugMug
-7. **Mark** - Adds marker tag to track processed images
+1. **Skip** - Images already carrying the marker tag are left out of the run entirely
+   (unless `force_reprocess`), so a second pass only covers what still needs doing
+2. **Download** - Fetches images from SmugMug to local cache
+3. **Extract** - Pulls EXIF data (GPS, date, camera info). GPS comes from the SmugMug API
+   first and EXIF only as a fallback, because SmugMug strips GPS from the image bytes
+4. **Detect** - Identifies faces using face recognition. A people override you have saved
+   replaces that list outright
+5. **Analyze** - Generates the caption, tags and (optionally) a Title using the AI vision
+   model, in ONE structured request per image. Your notes and pet descriptions go in last,
+   as facts that outrank the model's own reading
+6. **Format** - Combines AI output with EXIF data, person names, pet names and location tags
+7. **Update** - Pushes metadata back to SmugMug (skipped entirely in dry-run)
+8. **Mark** - Adds marker tag to track processed images
 
 ## Quick Start
 
@@ -68,19 +74,29 @@ The main orchestrator that coordinates all components:
 
 ```python
 ImageProcessor(
-    config: ConfigManager,           # Configuration
-    smugmug_client: SmugMugClient,  # Optional: SmugMug API
-    vision_model: VisionModel,       # Optional: AI vision model
-    cache_manager: CacheManager,     # Optional: Image cache
-    face_recognizer: FaceRecognizer, # Optional: Face detection
-    dry_run: bool = False           # Preview mode
+    config: ConfigManager,             # Configuration
+    smugmug_client: SmugMugClient,     # Optional: SmugMug API
+    vision_model: VisionModel,         # Optional: AI vision model
+    cache_manager: CacheManager,       # Optional: Image cache
+    face_recognizer: FaceRecognizer,   # Optional: Face detection
+    hint_manager: HintManager,         # Optional: user-asserted facts
+    dry_run: bool = False,             # Preview mode
+    preserve_existing: bool = None,    # None = use config; False = replace, do not merge
+    generate_titles: bool = None,      # None = use config
 )
 ```
+
+Every collaborator is injectable, which is the seam both the tests and the web UI use: pass
+mocks rather than reaching the network or a live Ollama. `preserve_existing` and
+`generate_titles` are per-run overrides — `None` means "use the configured value", so a
+caller that does not care never has to know what the config says.
 
 **Key Methods:**
 
 - `process_album(album_key, force_reprocess, skip_videos)` - Process all images in album
 - `process_image(image, album, force_reprocess)` - Process single image
+- `needs_processing(image)` - True if the image does not yet carry the marker tag. Lets a
+  caller filter an album *before* processing rather than processing and discarding skips
 
 ### MetadataFormatter Class
 
@@ -97,7 +113,6 @@ MetadataFormatter(
 
 - `format_caption(ai_caption, existing_caption, location, person_names)` - Combine caption sources
 - `format_tags(ai_tags, existing_tags, person_names, location_tags)` - Merge tags
-- `create_update_payload(caption, tags, title)` - Create SmugMug API payload
 
 ## Processing Pipeline
 
@@ -122,14 +137,12 @@ For each image in album:
   │  ├─ Match against reference faces
   │  └─ Get person names with confidence
   │
-  ├─ Build enhanced prompts
-  │  ├─ Add location context
-  │  ├─ Add person names
-  │  └─ Add date/time
-  │
-  ├─ Generate AI metadata
-  │  ├─ Caption (1-2 sentences)
-  │  └─ Tags (5-10 keywords)
+  ├─ Generate AI metadata  (ONE request: generate_metadata)
+  │  ├─ Combine the caption + tags instructions into one prompt
+  │  ├─ Append context: album name, location, people, relationships
+  │  ├─ Encode the image once (downscaled to max_image_dimension)
+  │  └─ One JSON-schema-constrained chat call → {caption, tags}
+  │     (vision.single_call: false restores the legacy two-request path)
   │
   ├─ Format metadata
   │  ├─ Merge AI caption with location + person names
@@ -148,7 +161,7 @@ Processing album: 2025:03:26 Grand Finale Cleaning House (16 items)
 Skipping 1 video file(s)
 
 [1/15] Processing: IMG_9887.JPG
-  Identified: Alice, Bob
+  Identified 2 of 3 face(s): Alice, Bob
   Result: ✓ Success (12.3s)
 
 [2/15] Processing: IMG_9888.JPG
@@ -177,10 +190,15 @@ smugmug:
   user_token: "YOUR_TOKEN"
   user_secret: "YOUR_SECRET"
 
-# Vision model
+# Vision model (any vision-capable model from `ollama list`)
 vision:
-  model: "llama3.2-vision"
+  model: "qwen3-vl:8b"
   endpoint: "http://localhost:11434"
+  think: false                    # Disable reasoning; see README_CONFIG.md
+  keep_alive: "30m"               # Keep the model loaded between images
+  single_call: true               # One request per image for caption + tags
+  structured_output: true         # JSON-schema-constrained reply
+  max_image_dimension: 1568       # Downscale long edge before upload
 
 # Processing options
 processing:
@@ -190,10 +208,11 @@ processing:
   preserve_existing: true         # Keep existing metadata
   image_size: "Medium"            # Download size
 
-# Prompts
+# Prompts (instructions only - album/location/people context is appended
+# by the vision layer). See smugvision/config/defaults.py for the shipped text.
 prompts:
-  caption: "Analyze this image and provide a concise caption..."
-  tags: "Generate 5-10 relevant keyword tags..."
+  caption: "You are a photo captioning assistant. Write exactly ONE caption..."
+  tags: "Output a comma-separated list of 5-10 keyword tags for this image..."
 ```
 
 ### Optional Settings
@@ -203,6 +222,7 @@ prompts:
 face_recognition:
   enabled: true
   reference_faces_dir: "~/.smugvision/reference_faces"
+  backend: "dlib"                 # "dlib" (default) | "insightface" (optional)
   min_confidence: 0.25
 
 # Cache
@@ -274,11 +294,13 @@ except SmugMugError as e:
 ```
 
 **Vision Model Timeout**: AI model not responding
-```python
-# Check Ollama is running:
+```bash
+# Check Ollama is running and that vision.model is one of the models it serves:
 ollama serve
-ollama pull llama3.2-vision
+ollama list
+ollama pull <the model named in vision.model>
 ```
+`vision.timeout` is applied to the underlying HTTP client; raise it on slow hardware.
 
 **Face Recognition Error**: Reference faces not found
 ```python
@@ -293,10 +315,15 @@ ls ~/.smugvision/reference_faces/
 - **Image download**: 0.5-2s (depends on size and network)
 - **EXIF extraction**: 0.1-0.3s
 - **Face detection**: 1-3s (if enabled)
-- **AI caption/tags**: 5-15s (depends on model and hardware)
+- **AI caption + tags**: model- and hardware-dependent. On `gemma4:latest` with the
+  defaults (`single_call: true`, `structured_output: true`, `think: false`) the single
+  request measured **1.76-2.77s warm**, with a **9.57s cold first request**. See
+  [`TIMING_ANALYSIS.md`](TIMING_ANALYSIS.md) for the full measurement table and its
+  caveats — those numbers are for one model on one machine.
 - **SmugMug update**: 0.2-0.5s
 
-**Total per image**: ~8-20 seconds
+The per-image total has not been re-measured end to end since the vision rewrite; do not
+quote one.
 
 ### Optimization Tips
 
@@ -304,25 +331,55 @@ ls ~/.smugvision/reference_faces/
 2. **Medium size images**: Balance quality vs speed (`image_size: "Medium"`)
 3. **Disable face recognition**: If not needed, saves 1-3s per image
 4. **Batch processing**: Process albums in off-peak hours
-5. **Local AI model**: Llama 3.2 Vision is faster than cloud APIs
+5. **Keep the model resident**: `vision.keep_alive` stops Ollama unloading the model
+   between images, so only the first image of a run pays load time
+6. **Downscale before upload**: `vision.max_image_dimension` (default 1568) shrinks the
+   base64 payload — a 3840x2880 JPEG measured 5.59 MB encoded at full size versus
+   1.07 MB at 1568px, for input the model tiles down anyway
+7. **Leave `structured_output: true`**: unconstrained free-text replies ramble toward
+   `max_tokens` and measured slower in every configuration tested
 
 ## Advanced Usage
 
 ### Custom Vision Model
 
+Any vision-capable model that Ollama serves works — the factory has no allow-list, so
+switching models is normally just a `vision.model` config change. To construct one
+explicitly and inject it:
+
 ```python
 from smugvision.vision import VisionModelFactory
 
-# Use different model
-vision = VisionModelFactory.create_model(
-    model_name="gpt-4o",  # Or other supported model
-    config=config
+# model_name is whatever `ollama list` reports.
+vision = VisionModelFactory.create(
+    "gemma4:latest",
+    endpoint="http://localhost:11434",
+    timeout=120,
+    think=False,
+    keep_alive="30m",
+    single_call=True,
+    structured_output=True,
 )
 
 processor = ImageProcessor(
     config=config,
     vision_model=vision
 )
+```
+
+`create(model_name, endpoint=None, **kwargs)` forwards `**kwargs` to the model
+constructor. To see what a running Ollama can serve:
+
+```python
+VisionModelFactory.list_models("http://localhost:11434")  # vision-capable models
+```
+
+For a genuinely different implementation — a non-Ollama backend, say — subclass
+`VisionModel` (implementing `generate_metadata`, `generate_caption` and `generate_tags`)
+and register it; a registration takes precedence over the default adapter:
+
+```python
+VisionModelFactory.register_model("my-backend", MyVisionModel)
 ```
 
 ### Process Specific Images
@@ -394,7 +451,7 @@ python test_processor.py TEST_ALBUM
 
 - Verify SmugMug credentials in config.yaml
 - Check token hasn't expired
-- Run `python get_smugmug_tokens.py` to refresh
+- Run `smugvision-get-tokens` to refresh
 
 ### "Vision model timeout"
 

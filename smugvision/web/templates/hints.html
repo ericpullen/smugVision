@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block title %}smugVision - Hints{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1>Hints</h1>
+        <p>
+            A hint is something you know about a photo that the model does not.
+            It is treated as <strong>ground truth and outranks the model's own
+            visual guess</strong> &mdash; which is how you stop a Nylabone being
+            captioned as "a long cracker". Hints are saved to
+            <code id="hints-file">~/.smugvision/hints.yaml</code> and are used by
+            the command line tool as well as this web UI.
+        </p>
+    </header>
+
+    <p class="notice hidden" id="load-error" role="alert"></p>
+    <p class="notice caution hidden" id="hints-disabled" role="alert"></p>
+
+    <div class="notice">
+        <strong>Scopes are applied most general first:</strong>
+        <span class="scope-badge global">global</span> then
+        <span class="scope-badge album">album</span> then
+        <span class="scope-badge image">image</span>.
+        All of the ones that apply to a frame are combined, so a global note and
+        an image note are both sent to the model.
+    </div>
+</article>
+
+<!-- Global scope. Deliberately first and marked as the widest reach. -->
+<article>
+    <header>
+        <div class="scope-head">
+            <h2>Global note</h2>
+            <span class="scope-badge global">global scope</span>
+        </div>
+        <p class="scope-reach">
+            Applies to <strong>every image in every album, including every album
+            you process in future</strong>. Keep it to durable facts &mdash; who
+            your family are, what your pets look like &mdash; not anything specific
+            to one shoot.
+        </p>
+    </header>
+
+    <div class="field">
+        <label for="global-hint">Global note</label>
+        <textarea id="global-hint" rows="3"
+                  placeholder="e.g. Biscuit is a black Labrador Retriever. Ada and Sam are our children."></textarea>
+        <p class="field-hint">Leave empty and save to remove the global note.</p>
+    </div>
+
+    <div class="button-row">
+        <button type="button" id="global-hint-btn">Save global note</button>
+        <span class="note-status" id="global-hint-status" role="status" aria-live="polite"></span>
+    </div>
+</article>
+
+<!-- Existing album/image notes. -->
+<article>
+    <header>
+        <h2>Saved album and image notes</h2>
+        <p>
+            Album notes apply to one album; image notes apply to a single frame.
+            The quickest way to add an image note is from a proof sheet, where you
+            can see the photograph while you write it.
+        </p>
+    </header>
+
+    <p class="visually-hidden" id="saved-status" role="status" aria-live="polite"></p>
+    <div id="saved-list">
+        <p class="muted">Loading saved notes…</p>
+    </div>
+</article>
+
+<!-- Pets: named once here, then ticked per photo on a proof sheet. -->
+<article>
+    <header>
+        <h2>Pets</h2>
+        <p>
+            Face recognition learns human faces from reference photos, so an animal is
+            invisible to it however often it appears. Name your pets here and they
+            become tickable on every frame of a proof sheet, next to the people.
+        </p>
+    </header>
+
+    <p class="visually-hidden" id="pets-status" role="status" aria-live="polite"></p>
+    <div id="pets-list">
+        <p class="muted">Loading pets…</p>
+    </div>
+
+    <form id="pet-form" novalidate>
+        <div class="field">
+            <label for="pet-name">Name</label>
+            <input type="text" id="pet-name" autocomplete="off" spellcheck="false"
+                   placeholder="Biscuit">
+            <p class="field-hint">
+                Also added as a keyword on any photo you tick this pet for.
+            </p>
+        </div>
+
+        <div class="field">
+            <label for="pet-description">What the model should be told</label>
+            <textarea id="pet-description" rows="2"
+                      placeholder="This is Biscuit, a Charcoal Labrador, and the family pet."></textarea>
+            <p class="field-hint">
+                Written out as a sentence, because this is handed to the model verbatim
+                as a fact it must accept. Say the breed, the name, and whose pet it is.
+            </p>
+        </div>
+
+        <div class="button-row">
+            <button type="submit" id="pet-save-btn">Save pet</button>
+            <span class="note-status" id="pet-status" role="status" aria-live="polite"></span>
+        </div>
+    </form>
+</article>
+
+<!-- Add by key, for when you are not looking at a proof sheet. -->
+<article>
+    <header>
+        <h2>Add a note by key</h2>
+        <p>
+            Album keys look like <code>Ab3kZq</code>; image keys look like
+            <code>Xy7NpQr</code>. Both are shown on the proof sheet.
+        </p>
+    </header>
+
+    <form id="add-form" novalidate>
+        <fieldset class="run-modes">
+            <legend>Scope</legend>
+            <label class="run-mode">
+                <input type="radio" name="add-scope" value="album" checked>
+                <span>
+                    <span class="run-mode-title">Album</span>
+                    <span class="run-mode-note">Every image in one album.</span>
+                </span>
+            </label>
+            <label class="run-mode">
+                <input type="radio" name="add-scope" value="image">
+                <span>
+                    <span class="run-mode-title">Image</span>
+                    <span class="run-mode-note">One single frame.</span>
+                </span>
+            </label>
+        </fieldset>
+
+        <div class="field">
+            <label for="add-key">Album or image key</label>
+            <input type="text" id="add-key" autocomplete="off" spellcheck="false"
+                   placeholder="Ab3kZq">
+        </div>
+
+        <div class="field">
+            <label for="add-text">Note</label>
+            <textarea id="add-text" rows="2"
+                      placeholder="e.g. The white ribbed object is a Nylabone dog chew, not food."></textarea>
+        </div>
+
+        <div class="button-row">
+            <button type="submit" id="add-btn">Save note</button>
+            <span class="note-status" id="add-status" role="status" aria-live="polite"></span>
+        </div>
+    </form>
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/hints.js') }}"></script>
+{% endblock %}

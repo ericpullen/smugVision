@@ -1,7 +1,20 @@
 """SmugMug API integration for smugVision."""
 
 from smugvision.smugmug.client import SmugMugClient
-from smugvision.smugmug.models import Album, AlbumImage
+from smugvision.smugmug.models import (
+    NODE_TYPE_ALBUM,
+    NODE_TYPE_FOLDER,
+    NODE_TYPE_SYSTEM_ALBUM,
+    ROOT_NODE_LABEL,
+    Album,
+    AlbumImage,
+    AlbumSearchResult,
+    BrowseNode,
+    NodeListing,
+    NodeRef,
+    keywords_contain,
+    split_keywords,
+)
 from smugvision.smugmug.exceptions import (
     SmugMugError,
     SmugMugAPIError,
@@ -14,6 +27,16 @@ __all__ = [
     "SmugMugClient",
     "Album",
     "AlbumImage",
+    "BrowseNode",
+    "NodeRef",
+    "NodeListing",
+    "AlbumSearchResult",
+    "NODE_TYPE_FOLDER",
+    "NODE_TYPE_ALBUM",
+    "NODE_TYPE_SYSTEM_ALBUM",
+    "ROOT_NODE_LABEL",
+    "split_keywords",
+    "keywords_contain",
     "SmugMugError",
     "SmugMugAPIError",
     "SmugMugAuthError",

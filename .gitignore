@@ -210,3 +210,9 @@ __marimo__/
 config.yaml
 *.egg-info/
 .eggs/
+
+# macOS
+.DS_Store
+
+# benchmark output
+benchmark_results.json

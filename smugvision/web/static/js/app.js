@@ -1,96 +1,224 @@
 /**
- * smugVision Web UI - Common JavaScript utilities
+ * smugVision Web UI - shared helpers.
+ *
+ * Vanilla JS, no framework, no build step. Loaded on every page by
+ * base.html; page-specific logic lives in its own file and reads these
+ * off window.smugvision.
  */
 
-// Utility function to escape HTML
+/* ------------------------------------------------------------------ *
+ * Text helpers
+ * ------------------------------------------------------------------ */
+
+/**
+ * Escape text for safe interpolation into HTML.
+ * Prefer setting .textContent; this is for the few template literals left.
+ */
 function escapeHtml(text) {
-    if (!text) return '';
+    if (text === null || text === undefined) return '';
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = String(text);
     return div.innerHTML;
 }
 
-// Utility function to format dates
+/** Format an ISO date as a short local date, or '' when absent/unparseable. */
 function formatDate(dateString) {
     if (!dateString) return '';
     const date = new Date(dateString);
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+    if (isNaN(date.getTime())) return '';
+    return date.toLocaleDateString();
 }
 
-// Utility function to truncate text
+/** Truncate to maxLength characters, adding an ellipsis when cut. */
 function truncateText(text, maxLength = 100) {
-    if (!text || text.length <= maxLength) return text;
-    return text.substring(0, maxLength) + '...';
+    if (!text || text.length <= maxLength) return text || '';
+    return text.substring(0, maxLength) + '…';
 }
 
-// API helper with error handling
+/** "1 image" / "2 images" - pluralize a count with its noun. */
+function plural(count, singular, pluralForm) {
+    const word = count === 1 ? singular : (pluralForm || singular + 's');
+    return count + ' ' + word;
+}
+
+/** Turn a reference-face folder name into a display name (John_Doe -> John Doe). */
+function displayName(name) {
+    return String(name || '').replace(/_/g, ' ');
+}
+
+/* ------------------------------------------------------------------ *
+ * Fetch helpers
+ *
+ * Every endpoint in this app reports failure as {"error": "..."} with a
+ * real HTTP status, so one error path covers all of them.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Call a JSON endpoint. Resolves with the parsed body; rejects with an
+ * Error whose .status is the HTTP status and .payload the parsed body
+ * (regenerate returns the failed image alongside its error, and callers
+ * need it to render the card).
+ */
 async function apiCall(url, options = {}) {
+    const opts = Object.assign({}, options);
+    opts.headers = Object.assign(
+        {'Content-Type': 'application/json'},
+        options.headers || {}
+    );
+
+    let response;
     try {
-        const response = await fetch(url, {
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
-            ...options
-        });
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || `HTTP ${response.status}`);
-        }
-        
-        return data;
-    } catch (error) {
-        console.error(`API call failed: ${url}`, error);
-        throw error;
+        response = await fetch(url, opts);
+    } catch (networkError) {
+        const err = new Error(
+            'Could not reach the smugVision server. Is it still running?'
+        );
+        err.status = 0;
+        throw err;
     }
+
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (parseError) {
+        data = null;
+    }
+
+    if (!response.ok) {
+        const message = (data && data.error)
+            ? data.error
+            : 'HTTP ' + response.status + ' ' + response.statusText;
+        const err = new Error(message);
+        err.status = response.status;
+        err.payload = data;
+        throw err;
+    }
+
+    return data;
 }
 
-// POST helper
-async function apiPost(url, body) {
-    return apiCall(url, {
-        method: 'POST',
-        body: JSON.stringify(body)
-    });
-}
-
-// GET helper
+/** GET a JSON endpoint. */
 async function apiGet(url) {
     return apiCall(url);
 }
 
-// Show notification (simple alert for now)
-function showNotification(message, type = 'info') {
-    // Could be enhanced with a toast library later
-    if (type === 'error') {
-        console.error(message);
-    } else {
-        console.log(message);
-    }
+/** POST a JSON body. */
+async function apiPost(url, body) {
+    return apiCall(url, {method: 'POST', body: JSON.stringify(body || {})});
 }
 
-// Debounce utility
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
+/** PUT a JSON body. */
+async function apiPut(url, body) {
+    return apiCall(url, {method: 'PUT', body: JSON.stringify(body || {})});
+}
+
+/** DELETE a resource. No body: the URL names what goes. */
+async function apiDelete(url) {
+    return apiCall(url, {method: 'DELETE'});
+}
+
+/* ------------------------------------------------------------------ *
+ * DOM helpers
+ * ------------------------------------------------------------------ */
+
+/**
+ * Create an element.
+ * @param {string} tag
+ * @param {Object} [attrs] - className, textContent, dataset, aria-*, etc.
+ * @param {Array} [children]
+ */
+function el(tag, attrs = {}, children = []) {
+    const node = document.createElement(tag);
+
+    Object.keys(attrs).forEach(function (key) {
+        const value = attrs[key];
+        if (value === null || value === undefined || value === false) return;
+
+        if (key === 'className') {
+            node.className = value;
+        } else if (key === 'text') {
+            node.textContent = value;
+        } else if (key === 'dataset') {
+            Object.keys(value).forEach(function (dataKey) {
+                node.dataset[dataKey] = value[dataKey];
+            });
+        } else if (key === 'html') {
+            node.innerHTML = value;
+        } else {
+            node.setAttribute(key, value === true ? '' : value);
+        }
+    });
+
+    (Array.isArray(children) ? children : [children]).forEach(function (child) {
+        if (child === null || child === undefined || child === false) return;
+        node.appendChild(
+            typeof child === 'string' ? document.createTextNode(child) : child
+        );
+    });
+
+    return node;
+}
+
+/** Replace all children of a node. */
+function setChildren(node, children) {
+    node.replaceChildren.apply(
+        node,
+        (Array.isArray(children) ? children : [children]).filter(Boolean)
+    );
+}
+
+/**
+ * Put a button into its loading state and return a function that restores it.
+ * Keeps the accessible label while the visual spinner runs.
+ */
+function busy(button, busyLabel) {
+    const originalLabel = button.textContent;
+    const originalDisabled = button.disabled;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    if (busyLabel) button.setAttribute('aria-label', busyLabel);
+
+    return function restore() {
+        button.disabled = originalDisabled;
+        button.removeAttribute('aria-busy');
+        button.removeAttribute('aria-label');
+        button.textContent = originalLabel;
     };
 }
 
-// Export for use in templates (globals)
+/** Announce a message in a live region, styled by kind. */
+function announce(node, message, kind) {
+    if (!node) return;
+    node.textContent = message || '';
+    node.classList.remove('error', 'ok');
+    if (kind) node.classList.add(kind);
+}
+
+/** Debounce a function by `wait` ms. */
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(function () {
+            func.apply(null, args);
+        }, wait);
+    };
+}
+
 window.smugvision = {
-    escapeHtml,
-    formatDate,
-    truncateText,
-    apiCall,
-    apiPost,
-    apiGet,
-    showNotification,
-    debounce
+    escapeHtml: escapeHtml,
+    formatDate: formatDate,
+    truncateText: truncateText,
+    plural: plural,
+    displayName: displayName,
+    apiCall: apiCall,
+    apiGet: apiGet,
+    apiPost: apiPost,
+    apiPut: apiPut,
+    apiDelete: apiDelete,
+    el: el,
+    setChildren: setChildren,
+    busy: busy,
+    announce: announce,
+    debounce: debounce
 };

@@ -16,11 +16,18 @@ git clone https://github.com/yourusername/smugvision.git
 cd smugvision
 
 # 2. Install dependencies
-pip install -r requirements.txt
+pip install -e .
 
-# 3. Install Ollama and pull the model
-ollama pull llama3.2-vision
+# 3. Install Ollama and pull a vision model
+#    Any vision-capable Ollama model works - there is no allow-list in the code.
+#    See what you already have, then pull the one you want to use:
+ollama list
+ollama pull <model>
 ```
+
+Set `vision.model` in `~/.smugvision/config.yaml` to that model's name. The shipped
+default is in `smugvision/config/defaults.py`; with `vision.validate_model: true`
+smugVision warns at startup (it never aborts) if the configured model is not installed.
 
 ## Configuration
 
@@ -33,7 +40,7 @@ ollama pull llama3.2-vision
 
 2. **User Token & Secret:**
    ```bash
-   python get_smugmug_tokens.py
+   smugvision-get-tokens
    ```
    - Follow the OAuth flow in your browser
    - Copy the user token and user secret
@@ -41,10 +48,25 @@ ollama pull llama3.2-vision
 ### Step 2: Run Setup
 
 ```bash
-python -m smugvision.config.manager --setup
+smugvision-config
 ```
 
-This creates `~/.smugvision/config.yaml` with your settings.
+This creates `~/.smugvision/config.yaml` with your settings. It prompts only for the four
+SmugMug credentials; everything else falls back to the defaults in
+`smugvision/config/defaults.py`, so you only add a key to your config file when you want
+to change it.
+
+Settings worth knowing about once you are running (see
+[`config.yaml.example`](config.yaml.example) for the full annotated list):
+
+| Key | Default | Why you'd change it |
+|---|---|---|
+| `vision.model` | see `defaults.py` | Any model from `ollama list` |
+| `vision.think` | `false` | Set to `"low"`/`"medium"`/`"high"` only if you also raise `max_tokens` a lot |
+| `vision.keep_alive` | `"30m"` | Keeps the model loaded between images |
+| `vision.single_call` | `true` | `false` restores separate caption and tags requests |
+| `vision.structured_output` | `true` | `false` for models that mishandle JSON schemas |
+| `face_recognition.backend` | `"dlib"` | `"insightface"` for the optional experimental backend |
 
 ### Step 3: (Optional) Setup Face Recognition
 
@@ -128,7 +150,7 @@ ollama list
 ```
 
 ### "SmugMug authentication failed"
-- Re-run `python get_smugmug_tokens.py`
+- Re-run `smugvision-get-tokens`
 - Verify credentials in `~/.smugvision/config.yaml`
 
 ### "No faces detected"

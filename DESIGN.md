@@ -26,33 +26,46 @@ smugVision is a command-line tool that uses local AI vision models to automatica
 ### Primary Components
 
 - **Language:** Python 3.10+
-- **AI Model:** Llama 3.2 Vision 11B (via Ollama) - Default, but modular for future model support
+- **AI Model:** any vision-capable model served by Ollama; the name lives in `vision.model`
+  and switching models requires no code change
 - **SmugMug Integration:** Python library or custom API wrapper
 - **Configuration:** YAML or JSON config file
 - **Logging:** Python standard logging library with timestamps and module identification
 
 ### Model Selection Rationale
 
-**Llama 3.2 Vision 11B** was chosen as the default model because:
-- Supports images up to 1120x1120 pixels resolution
-- Runs efficiently on Apple Silicon (M4 Pro) with at least 8GB VRAM
-- Provides strong image understanding and captioning capabilities
-- Free and runs locally without API costs
-- Works well via Ollama for easy management
+The project originally hard-selected Llama 3.2 Vision 11B. That is no longer the case:
+`VisionModelFactory` has no allow-list and maps every model name to the one Ollama
+adapter, so the "default" is now purely the `vision.model` value in
+`smugvision/config/defaults.py`, changeable in config alone.
 
-**Image Size Recommendation:** Download medium-sized images (approximately 1024-1200px on longest edge) from SmugMug. This balances:
-- Quality sufficient for accurate AI analysis
-- Bandwidth efficiency
-- Processing speed
-- Staying within the model's optimal resolution range (1120x1120px)
+What still guides the choice:
+- Runs locally on Apple Silicon without API costs
+- Strong image understanding and captioning
+- Available through Ollama, so installation and lifecycle management are `ollama pull`
 
-### Alternative Models (Future Consideration)
+`vision.validate_model` (default true) checks at startup whether the configured model is
+in Ollama's tag list and **warns** if it is not; it never aborts the run.
 
-While Llama 3.2 Vision is the initial choice, the architecture should support:
-- OpenAI GPT-4o/GPT-4o-mini (cloud-based, best quality)
+**Image size:** the client now downscales the image's long edge to
+`vision.max_image_dimension` (default 1568px; `0`/`null` disables, never upscales) before
+base64 encoding. Modern vision models tile input to roughly 1024-1568px, so the SmugMug
+download size no longer has to be the resolution guard — `processing.image_size` is now a
+bandwidth and cache-size choice rather than a correctness one. Measured on one real
+3840x2880 JPEG: 5.59 MB base64 with downscaling off, 1.07 MB at 1568px.
+
+### Alternative Models
+
+Any vision-capable model Ollama serves already works with no code change — that part of
+this section is done. What remains future work is **non-Ollama** backends:
+- OpenAI GPT-4o/GPT-4o-mini (cloud-based)
 - Google Gemini Vision (cloud-based)
-- Microsoft Florence-2 (lightweight, can run locally)
+- Microsoft Florence-2 (lightweight, can run locally outside Ollama)
 - RAM/RAM++ (specialized for tagging, open-source)
+
+Each of those would be a new `VisionModel` subclass wired in via
+`VisionModelFactory.register_model(name, cls)`, which takes precedence over the default
+Ollama adapter.
 
 ---
 
@@ -109,7 +122,12 @@ smugvision/
 │   └── defaults.py          # Default configuration values
 ├── face/                    # ✅ IMPLEMENTED
 │   ├── __init__.py
-│   └── recognizer.py        # Face detection and recognition
+│   ├── recognizer.py        # Backend-agnostic coordinator: reference map,
+│   │                        #   encoding cache, confidence filtering
+│   └── backends/            # Pluggable embedding backends
+│       ├── base.py          # FaceBackend ABC (normalized score contract)
+│       ├── dlib_backend.py  # Default: face_recognition / dlib, 128-d euclidean
+│       └── insightface_backend.py  # Optional: ArcFace ONNX, 512-d cosine
 ├── smugmug/                 # ✅ IMPLEMENTED
 │   ├── __init__.py
 │   ├── client.py            # SmugMug API client wrapper
@@ -118,7 +136,8 @@ smugvision/
 ├── vision/                  # ✅ IMPLEMENTED
 │   ├── __init__.py
 │   ├── base.py              # Abstract base class for vision models
-│   ├── llama.py             # Llama 3.2 Vision implementation
+│   ├── llama.py             # LlamaVisionModel: the generic Ollama adapter
+│   │                        #   (historical name; drives every Ollama vision model)
 │   ├── factory.py           # Factory pattern for model selection
 │   └── exceptions.py        # Custom exceptions for vision models
 ├── cache/                  # ✅ IMPLEMENTED
@@ -160,10 +179,32 @@ smugmug:
 
 # Vision Model Configuration
 vision:
-  model: "llama3.2-vision"     # Options: llama3.2-vision, gpt-4o, etc.
-  endpoint: "http://localhost:11434"  # Ollama endpoint
+  model: "qwen3-vl:8b"          # Any vision-capable model from `ollama list`
+  endpoint: null                # Ollama endpoint (null = $OLLAMA_HOST, else localhost)
   temperature: 0.7
-  max_tokens: 150
+  max_tokens: 500               # One budget for caption + tags in a single reply
+  timeout: 120
+  think: false                  # false | "low" | "medium" | "high" | null
+  keep_alive: "30m"             # Keep the model resident between images
+  single_call: true             # One request per image; false = legacy two-call path
+  structured_output: true       # JSON-schema-constrained reply; false = free text
+  max_image_dimension: 1568     # Downscale long edge before encoding; 0/null disables
+  jpeg_quality: 85
+  validate_model: true          # Warn (never fail) if the model is not installed
+
+# Face Recognition Configuration
+face_recognition:
+  enabled: true
+  reference_faces_dir: "~/.smugvision/reference_faces"
+  backend: "dlib"               # "dlib" (default) | "insightface" (optional extra)
+  tolerance: 0.6                # dlib only - euclidean distance, lower is stricter
+  model: "cnn"                  # dlib DETECTOR ('hog'/'cnn'), not the backend selector
+  detection_scale: 0.5          # dlib only
+  min_confidence: 0.25          # backend-agnostic normalized 0.0-1.0 threshold
+  insightface:                  # only read when backend: "insightface"
+    model_name: "buffalo_l"
+    det_size: [640, 640]
+    similarity_threshold: 0.4   # cosine similarity, HIGHER is stricter
 
 # Processing Configuration
 processing:
@@ -171,7 +212,7 @@ processing:
   generate_captions: true       # Enable caption generation
   generate_tags: true           # Enable tag generation
   preserve_existing: true       # Keep existing captions/tags
-  image_size: "medium"          # Download size from SmugMug
+  image_size: "Medium"          # Download size from SmugMug (case-insensitive)
 
 # Location Resolution Configuration
 location:
@@ -517,7 +558,7 @@ logger.error(f"Failed to update image {image_id}: {error}", exc_info=True)
 ```
 2024-11-23 14:32:15,123 - smugvision.smugmug.client - INFO - Authenticating with SmugMug API
 2024-11-23 14:32:16,456 - smugvision.processing.processor - INFO - Processing gallery abc123
-2024-11-23 14:32:17,789 - smugvision.vision.llama - DEBUG - Sending prompt to Llama 3.2 Vision
+2024-11-23 14:32:17,789 - smugvision.vision.llama - DEBUG - Sending prompt to the vision model
 2024-11-23 14:32:19,012 - smugvision.smugmug.client - ERROR - API request failed: 401 Unauthorized
 ```
 
@@ -559,7 +600,7 @@ logger.error(f"Failed to update image {image_id}: {error}", exc_info=True)
 - [x] Single gallery image retrieval
 - [x] Album and image data models
 - [x] Image cache management (download, organize, skip existing)
-- [x] Llama 3.2 Vision integration via Ollama
+- [x] Ollama integration (any vision-capable model; no allow-list)
 - [x] Caption and tag generation
 - [x] Metadata update to SmugMug (PATCH endpoint)
 - [x] Marker tag system (check and add tags)
@@ -600,6 +641,30 @@ logger.error(f"Failed to update image {image_id}: {error}", exc_info=True)
 - [ ] Folder processing support (planned for 1.0)
 - [ ] Cache cleanup functionality (planned for 1.0)
 - [ ] Integration tests
+
+### Version 0.4.0 - Complete ✓
+
+The proof-sheet workflow: the web UI stopped being a monitor and became the primary way to
+run smugVision, on the principle that the model's output is a *proposal* and the person who
+took the photo is the authority.
+
+- [x] Gallery browser: one level of the node tree per request, so cost is independent of
+      account size
+- [x] Proof sheet with a per-frame diff, always dry-run, write behind a latch and a dialog
+- [x] Hints — user-asserted facts at global / album / image scope, injected as ground truth
+- [x] Location overrides that *replace* the geocoded place name rather than argue with it
+- [x] People overrides that replace the recognised-name list, with a picker over the
+      reference faces; pinned people as large tiles, the rest behind a drawer
+- [x] Pets — named subjects with no reference face, ticked per photo (`pets.yaml`)
+- [x] Title generation (`processing.generate_titles`, `prompts.title`), off by default
+- [x] Per-run overrides for replace-vs-merge and titles, in both front ends
+- [x] Already-tagged frames left out of a run entirely, not processed and discarded
+- [x] Proof-state badges per album, so you can see what you have already done
+- [x] Re-read one frame, or every frame in an album, after changing a note
+- [x] Return to the folder you started from after a write
+- [x] One structured Ollama call per image; no model allow-list
+- [x] Pluggable face backends (dlib default, optional InsightFace/ArcFace)
+- [x] Reverse-geocoding cache (failures cached too, deliberately)
 
 ### Version 1.0.0
 - [ ] Complete documentation
@@ -651,7 +716,7 @@ logger.error(f"Failed to update image {image_id}: {error}", exc_info=True)
 1. **Python 3.10+**
 2. **Ollama installed** on macOS
 3. **SmugMug API credentials** (API key, secret, OAuth tokens)
-4. **Llama 3.2 Vision model** downloaded via Ollama
+4. **A vision-capable model** downloaded via Ollama (`ollama list` to check)
 
 ### Installation Steps
 
@@ -662,8 +727,10 @@ brew install ollama
 # 2. Start Ollama service
 ollama serve
 
-# 3. Download Llama 3.2 Vision model
-ollama pull llama3.2-vision
+# 3. Download a vision model - any vision-capable Ollama model works.
+#    Set its name as vision.model in ~/.smugvision/config.yaml.
+ollama list
+ollama pull <model>
 
 # 4. Clone repository
 git clone https://github.com/yourusername/smugvision.git
@@ -776,6 +843,37 @@ class MetadataResult:
     processing_time: float  # seconds
 ```
 
+### Vision Model Interface
+
+The primary entry point is `generate_metadata()` — one prompt, one image encode, one
+JSON-schema-constrained chat call returning both halves of the metadata:
+
+```python
+def generate_metadata(
+    self,
+    image_path: str,
+    caption_instruction: str,
+    tags_instruction: str,
+    *,
+    temperature: float = 0.4,
+    max_tokens: int = 400,
+    location_context: Optional[str] = None,
+    person_names: Optional[List[str]] = None,   # raw names, underscores intact
+    total_faces: Optional[int] = None,          # detected, not recognized
+    album_name: Optional[str] = None,
+) -> MetadataResult:
+    ...
+```
+
+Passing `""` for either instruction skips that half of the reply. The keyword defaults
+above are rarely what runs: `ImageProcessor` passes `vision.temperature` and
+`vision.max_tokens` from config explicitly, so the config values win.
+
+`generate_caption()` and `generate_tags()` retain their original signatures and remain
+part of the ABC; they are thin wrappers over `generate_metadata`. `vision.single_call:
+false` restores two separate requests, and `vision.structured_output: false` restores
+free-text output with heuristic parsing — both paths are live, not stubs.
+
 ---
 
 ## Current Status & Next Steps
@@ -792,8 +890,8 @@ class MetadataResult:
 
 **AI/ML Layer:**
 - ✅ Vision model abstraction (factory pattern with base class)
-- ✅ Llama 3.2 Vision integration via Ollama
-- ✅ Caption and tag generation
+- ✅ Ollama integration supporting any vision-capable model (no allow-list)
+- ✅ Caption and tag generation from a single structured call per image
 - ✅ EXIF data extraction with GPS and reverse geocoding
 - ✅ Face detection and recognition with configurable confidence
 - ✅ Person relationship management for context-aware captions
@@ -874,12 +972,12 @@ For each image in album:
   2. Download to cache (skip if cached)
   3. Extract EXIF data (GPS, camera info, date)
   4. Detect and identify faces (if enabled)
-  5. Generate caption with vision model
-  6. Generate tags with vision model
-  7. Format metadata (merge person names, location)
-  8. Update SmugMug via PATCH API
-  9. Add marker tag
-  10. Log results and metrics
+  5. Generate caption AND tags in ONE structured vision call
+     (generate_metadata; vision.single_call=false restores the old 5/6 split)
+  6. Format metadata (merge person names, location)
+  7. Update SmugMug via PATCH API
+  8. Add marker tag
+  9. Log results and metrics
 ```
 
 **Error Handling Strategy:**
@@ -902,7 +1000,8 @@ For each image in album:
 1. **Metadata backup**: Should we maintain local backup of original metadata before modification?
 2. **Prompt templates**: Should we support per-gallery custom prompts?
 3. **Batch size**: What's the optimal number of images to process before syncing to SmugMug?
-4. **Model switching**: Should we support multiple models simultaneously for comparison?
+4. **Model switching**: switching models is already just a `vision.model` config change.
+   The open part is running two models *simultaneously* on the same image for comparison.
 5. **Undo functionality**: How to implement rollback of metadata changes?
 
 ---
@@ -910,6 +1009,13 @@ For each image in album:
 ---
 
 ## Web UI Design (Phase 3 Feature)
+
+> **Status: built, and it has moved on from this design.** The shipped UI is a two-step
+> proof sheet — pick an album, review and correct every proposal, then write — and it grew
+> hints, location/people/pet overrides, proof-state badges and album-wide re-reads that this
+> section never anticipated. Read [README.md](README.md#the-web-proof-sheet) for what it
+> actually does and [CLAUDE.md](CLAUDE.md) for how it is wired. **The design below is kept
+> as the original intent, not as a description of the current code.**
 
 ### Overview
 

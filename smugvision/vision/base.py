@@ -1,9 +1,10 @@
 """Abstract base class for vision models."""
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -11,35 +12,44 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MetadataResult:
     """Generated metadata for an image.
-    
+
     Attributes:
         caption: Generated caption text
         tags: List of generated keyword tags
         confidence: Confidence score from 0.0 to 1.0
         model_used: Name of the model that generated the metadata
         processing_time: Time taken to process in seconds
+        title: Short title, ``""`` unless a title was requested and the model returned
+            one. Opportunistic by design: a missing title is never an error, because a
+            title is optional metadata and losing a whole run over it would be absurd.
     """
+
     caption: str
     tags: List[str]
     confidence: float
     model_used: str
     processing_time: float
+    title: str = ""
 
 
 class VisionModel(ABC):
     """Abstract base class for vision models.
-    
+
     This class defines the interface that all vision model implementations
     must follow. It provides methods for generating captions and tags from images.
-    
+
+    The primary entry point is :meth:`generate_metadata`, which produces a caption
+    and tags together. :meth:`generate_caption` and :meth:`generate_tags` are kept
+    for backward compatibility and are expected to be thin wrappers around it.
+
     Attributes:
         model_name: Name identifier for the model
         endpoint: API endpoint URL for the model service
     """
-    
+
     def __init__(self, model_name: str, endpoint: Optional[str] = None) -> None:
         """Initialize the vision model.
-        
+
         Args:
             model_name: Name identifier for the model
             endpoint: Optional API endpoint URL (for local/remote services)
@@ -47,20 +57,76 @@ class VisionModel(ABC):
         self.model_name = model_name
         self.endpoint = endpoint
         logger.info(f"Initialized {self.__class__.__name__} with model: {model_name}")
-    
+
+    @abstractmethod
+    def generate_metadata(
+        self,
+        image_path: str,
+        caption_instruction: str,
+        tags_instruction: str,
+        *,
+        temperature: float = 0.4,
+        max_tokens: int = 400,
+        location_context: Optional[str] = None,
+        person_names: Optional[List[str]] = None,
+        total_faces: Optional[int] = None,
+        album_name: Optional[str] = None,
+        hints: Optional[str] = None,
+    ) -> MetadataResult:
+        """Generate a caption and keyword tags for an image in a single pass.
+
+        Implementations should build ONE prompt that combines both instructions with
+        all supplied context (album name, location, person names and any locally
+        configured relationship information), encode the image ONCE and issue a single
+        request to the model.
+
+        Passing an empty ``caption_instruction`` or ``tags_instruction`` disables that
+        half of the response; the corresponding field of the result is then empty.
+
+        Args:
+            image_path: Path to the image file
+            caption_instruction: Instruction describing the caption to produce.
+                An empty string skips caption generation.
+            tags_instruction: Instruction describing the tags to produce.
+                An empty string skips tag generation.
+            temperature: Sampling temperature (0.0 to 1.0)
+            max_tokens: Maximum number of tokens in the response, shared by the
+                caption and the tags
+            location_context: Optional resolved place name for the photo
+            person_names: Optional list of recognized person names. Pass the raw
+                reference-folder names (``John_Doe``); implementations format them
+                for display.
+            total_faces: Optional count of faces detected in the image, which may be
+                larger than ``len(person_names)`` when some faces are unrecognized
+            album_name: Optional album name to use as additional context
+            hints: Optional user-asserted facts about this photo, already resolved from
+                every applicable scope. Implementations must treat this as ground truth
+                that outranks the model's own visual interpretation, and must inject it
+                last so nothing later in the prompt dilutes it.
+
+        Returns:
+            MetadataResult populated with the caption, tags, model name and elapsed time
+
+        Raises:
+            VisionModelError: If metadata generation fails
+        """
+        pass
+
     @abstractmethod
     def generate_caption(
-        self, 
-        image_path: str, 
+        self,
+        image_path: str,
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 150,
         location_context: Optional[str] = None,
         person_names: Optional[List[str]] = None,
-        total_faces: Optional[int] = None
+        total_faces: Optional[int] = None,
     ) -> str:
         """Generate a caption for an image.
-        
+
+        Backward-compatible convenience wrapper around :meth:`generate_metadata`.
+
         Args:
             image_path: Path to the image file
             prompt: Prompt text to guide caption generation
@@ -69,39 +135,37 @@ class VisionModel(ABC):
             location_context: Optional location information to include in prompt
             person_names: Optional list of identified person names to include in prompt
             total_faces: Optional total number of faces detected (including unrecognized)
-            
+
         Returns:
             Generated caption text
-            
+
         Raises:
             VisionModelError: If caption generation fails
         """
         pass
-    
+
     @abstractmethod
     def generate_tags(
-        self,
-        image_path: str,
-        prompt: str,
-        temperature: float = 0.7,
-        max_tokens: int = 150
+        self, image_path: str, prompt: str, temperature: float = 0.7, max_tokens: int = 150
     ) -> List[str]:
         """Generate keyword tags for an image.
-        
+
+        Backward-compatible convenience wrapper around :meth:`generate_metadata`.
+
         Args:
             image_path: Path to the image file
             prompt: Prompt text to guide tag generation
             temperature: Sampling temperature (0.0 to 1.0)
             max_tokens: Maximum number of tokens in response
-            
+
         Returns:
             List of generated keyword tags
-            
+
         Raises:
             VisionModelError: If tag generation fails
         """
         pass
-    
+
     def process_image(
         self,
         image_path: str,
@@ -112,14 +176,15 @@ class VisionModel(ABC):
         generate_caption: bool = True,
         generate_tags: bool = True,
         use_exif_location: bool = True,
-        face_recognizer: Optional[object] = None
+        face_recognizer: Optional[object] = None,
     ) -> MetadataResult:
         """Process an image to generate both caption and tags.
-        
-        This is a convenience method that generates both caption and tags
-        in a single call, returning a MetadataResult object. It automatically
-        extracts EXIF location data if available and includes it in the caption prompt.
-        
+
+        This is a convenience method that gathers context (faces, EXIF location) and
+        then generates caption and tags, returning a MetadataResult object. When both
+        a caption and tags are requested it uses a single :meth:`generate_metadata`
+        call so the image is encoded and sent only once.
+
         Args:
             image_path: Path to the image file
             caption_prompt: Prompt for caption generation
@@ -129,21 +194,20 @@ class VisionModel(ABC):
             generate_caption: Whether to generate caption
             generate_tags: Whether to generate tags
             use_exif_location: Whether to extract and use EXIF location data
-            
+            face_recognizer: Optional FaceRecognizer used to identify people
+
         Returns:
             MetadataResult containing generated metadata
-            
+
         Raises:
             VisionModelError: If processing fails
         """
-        import time
-        
         start_time = time.time()
         caption = ""
         tags: List[str] = []
         location_context: Optional[str] = None
         person_names: List[str] = []
-        
+
         # Identify faces if face recognizer is provided
         total_faces = 0
         if face_recognizer and generate_caption:
@@ -152,11 +216,11 @@ class VisionModel(ABC):
                 logger.debug("Calling face_recognizer.get_person_names()...")
                 person_names = face_recognizer.get_person_names(image_path)
                 logger.debug(f"get_person_names() returned: {person_names}")
-                
+
                 logger.debug("Calling face_recognizer.get_face_count()...")
                 total_faces = face_recognizer.get_face_count(image_path)
                 logger.debug(f"get_face_count() returned: {total_faces}")
-                
+
                 if person_names:
                     recognized_count = len(person_names)
                     logger.info(
@@ -171,25 +235,23 @@ class VisionModel(ABC):
                 elif total_faces > 0:
                     # Faces detected but none recognized
                     logger.info(
-                        f"Detected {total_faces} face(s) in image, but could not identify any of them"
+                        f"Detected {total_faces} face(s) in image, "
+                        f"but could not identify any of them"
                     )
                 else:
                     # No faces detected
                     logger.info("No faces detected in image")
             except Exception as e:
-                logger.warning(
-                    f"Failed to identify faces in {image_path}: {e}",
-                    exc_info=True
-                )
-        
+                logger.warning(f"Failed to identify faces in {image_path}: {e}", exc_info=True)
+
         # Extract EXIF location if requested
         if use_exif_location and generate_caption:
             try:
                 from smugvision.utils.exif import extract_exif_location, reverse_geocode
-                
+
                 logger.debug(f"Extracting EXIF location from {image_path}")
                 exif_location = extract_exif_location(image_path)
-                
+
                 if exif_location.has_coordinates:
                     logger.info(
                         f"Found GPS coordinates: {exif_location.latitude:.6f}, "
@@ -200,35 +262,43 @@ class VisionModel(ABC):
                         logger.debug("Attempting reverse geocoding...")
                         # Use interactive=False for batch processing (can be made configurable)
                         location_name = reverse_geocode(
-                            exif_location.latitude,
-                            exif_location.longitude,
-                            interactive=False
+                            exif_location.latitude, exif_location.longitude, interactive=False
                         )
                         if location_name:
                             location_context = location_name
-                            logger.info(
-                                f"Using location context for caption: {location_context}"
-                            )
+                            logger.info(f"Using location context for caption: {location_context}")
                         else:
                             # Fallback to coordinates if geocoding fails
                             location_context = (
-                                f"{exif_location.latitude:.6f}, "
-                                f"{exif_location.longitude:.6f}"
+                                f"{exif_location.latitude:.6f}, " f"{exif_location.longitude:.6f}"
                             )
                             logger.info(
-                                f"Using GPS coordinates as location context: "
-                                f"{location_context}"
+                                f"Using GPS coordinates as location context: {location_context}"
                             )
                 else:
                     logger.debug(f"No GPS coordinates found in EXIF data for {image_path}")
             except Exception as e:
                 logger.warning(
-                    f"Failed to extract EXIF location from {image_path}: {e}",
-                    exc_info=True
+                    f"Failed to extract EXIF location from {image_path}: {e}", exc_info=True
                 )
-        
+
         try:
-            if generate_caption:
+            if generate_caption and generate_tags:
+                # Single call: one image encode, one request for caption + tags.
+                logger.debug(f"Generating caption and tags for image: {image_path}")
+                result = self.generate_metadata(
+                    image_path,
+                    caption_prompt,
+                    tags_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    location_context=location_context,
+                    person_names=person_names,
+                    total_faces=total_faces if face_recognizer else None,
+                )
+                caption = result.caption
+                tags = list(result.tags)
+            elif generate_caption:
                 logger.debug(f"Generating caption for image: {image_path}")
                 caption = self.generate_caption(
                     image_path,
@@ -237,38 +307,31 @@ class VisionModel(ABC):
                     max_tokens,
                     location_context=location_context,
                     person_names=person_names,
-                    total_faces=total_faces if face_recognizer else None
+                    total_faces=total_faces if face_recognizer else None,
                 )
-            
-            if generate_tags:
+            elif generate_tags:
                 logger.debug(f"Generating tags for image: {image_path}")
-                tags = self.generate_tags(
-                    image_path, tags_prompt, temperature, max_tokens
-                )
-                
+                tags = self.generate_tags(image_path, tags_prompt, temperature, max_tokens)
+
+            if generate_tags and person_names:
                 # Always add identified person names as tags
-                if person_names:
-                    formatted_names = [name.replace('_', ' ') for name in person_names]
-                    for name in formatted_names:
-                        # Add name as tag if not already present (case-insensitive)
-                        name_lower = name.lower()
-                        if not any(tag.lower() == name_lower for tag in tags):
-                            tags.insert(0, name)  # Add at beginning
-                            logger.debug(f"Added person name to tags: {name}")
-            
+                formatted_names = [name.replace("_", " ") for name in person_names]
+                for name in formatted_names:
+                    # Add name as tag if not already present (case-insensitive)
+                    name_lower = name.lower()
+                    if not any(tag.lower() == name_lower for tag in tags):
+                        tags.insert(0, name)  # Add at beginning
+                        logger.debug(f"Added person name to tags: {name}")
+
             processing_time = time.time() - start_time
-            
+
             return MetadataResult(
                 caption=caption,
                 tags=tags,
                 confidence=1.0,  # Default confidence, can be overridden
                 model_used=self.model_name,
-                processing_time=processing_time
+                processing_time=processing_time,
             )
         except Exception as e:
-            logger.error(
-                f"Failed to process image {image_path}: {e}", 
-                exc_info=True
-            )
+            logger.error(f"Failed to process image {image_path}: {e}", exc_info=True)
             raise
-

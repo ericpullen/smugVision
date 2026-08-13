@@ -11,52 +11,127 @@ DEFAULT_CONFIG = {
         "user_token": "",
         "user_secret": "",
     },
-    
     # Vision Model Configuration
     "vision": {
-        "model": "qwen3-vl:8b",
-        "endpoint": "http://localhost:11434",
-        "temperature": 0.7,
-        "max_tokens": 500,  # Thinking models need more tokens
+        # Any vision-capable model served by Ollama. Run `ollama list` to see what is
+        # installed locally; the factory no longer restricts the name to an allow-list.
+        # gemma4:latest (the ~9.6GB e4b variant) is the default because it runs on modest
+        # hardware while still producing clean captions. On a machine with memory to spare,
+        # gemma4:26b is worth setting instead: it is a mixture-of-experts model activating
+        # only ~3.8B params per token, so it costs ~20% more latency than e4b for noticeably
+        # better subject grounding. See scripts/benchmark_models.py to compare on your own
+        # photos before switching.
+        "model": "gemma4:latest",
+        # Ollama endpoint. None (the default) lets the ollama client resolve the host
+        # itself, which honours $OLLAMA_HOST and falls back to http://localhost:11434.
+        # Setting a URL here overrides $OLLAMA_HOST.
+        "endpoint": None,
+        # Captioning is a description task, not a creative one. 0.7 produced a visibly
+        # wrong caption roughly 1 run in 12 on a photo with an ambiguous subject, and made
+        # preview-then-commit unpredictable because each dry run generated a different
+        # sentence. 0.3 was stable across repeated runs on the same image.
+        "temperature": 0.3,
+        # Budget for ONE response that carries the caption AND the tags together.
+        "max_tokens": 500,
         "timeout": 120,
+        # Ollama `think` parameter: False | True | "low" | "medium" | "high" | None.
+        # False keeps reasoning models from spending the whole token budget thinking;
+        # None omits the parameter and lets the model decide.
+        "think": False,
+        # Ollama `keep_alive`: keeps the model resident between images in an album so
+        # only the first image of a run pays load time.
+        "keep_alive": "30m",
+        # One request returns caption + tags. Set False for the legacy two-call path.
+        "single_call": True,
+        # Constrain the response with a JSON schema. Set False for free-text output
+        # plus heuristic parsing (compatibility fallback for models that ignore or
+        # mishandle schemas).
+        "structured_output": True,
+        # Downscale the long edge to this many pixels before base64 encoding.
+        # 0 or None disables. Images are never upscaled.
+        "max_image_dimension": 1568,
+        "jpeg_quality": 85,
+        # Warn (never fail) when the configured model is absent from Ollama's tag list.
+        "validate_model": True,
     },
-    
     # Face Recognition Configuration
     "face_recognition": {
         "enabled": True,
         "reference_faces_dir": str(Path.home() / ".smugvision" / "reference_faces"),
+        # Embedding backend: "dlib" (default) or "insightface" (optional extra).
+        "backend": "dlib",
+        # dlib-only knobs. They are euclidean-distance / dlib-detector settings and
+        # have no meaning for the insightface backend, which has its own block below.
         "tolerance": 0.6,
         "model": "cnn",
         "detection_scale": 0.5,
+        # Backend-agnostic: minimum normalized 0.0-1.0 confidence for a named match.
         "min_confidence": 0.25,
         "use_cache": True,  # Cache face encodings for faster startup
         "cache_dir": str(Path.home() / ".smugvision" / "cache" / "face_encodings"),
+        # Options for the optional InsightFace (ArcFace ONNX) backend. Ignored unless
+        # backend == "insightface". similarity_threshold is a COSINE similarity, so
+        # higher is stricter - it is not interchangeable with `tolerance`.
+        "insightface": {
+            "model_name": "buffalo_l",
+            "det_size": [640, 640],
+            "similarity_threshold": 0.4,
+        },
     },
-    
     # Processing Configuration
     "processing": {
         "marker_tag": "smugvision",
         "generate_captions": True,
         "generate_tags": True,
         "preserve_existing": True,
-        "image_size": "medium",
+        # Off by default: smugVision has never written Title, and turning it on for
+        # existing users without asking would start changing a field they may curate by
+        # hand. When on, a title is only ever offered, never required - see
+        # MetadataResult.title.
+        "generate_titles": False,
+        # SmugMug size name. Matched case-insensitively by SmugMugClient.download_image,
+        # so an existing lowercase "medium" in a user's config keeps working.
+        "image_size": "Medium",
         "use_exif_location": True,
     },
-    
     # Location Resolution Configuration
     "location": {
         "custom_locations_file": str(Path.home() / ".smugvision" / "locations.yaml"),
         "check_custom_first": True,
         "use_aliases_as_tags": True,
     },
-    
+    # Hint Configuration
+    # Hints are facts about a photo that the model cannot see for itself, asserted by
+    # the person who took it and injected into the prompt as ground truth. They exist
+    # because a vision model describes what a photo looks like, not what it is: a ribbed
+    # white Nylabone dog chew is a perfectly reasonable "long cracker" if you have never
+    # seen one. Scopes are global / per-album / per-image, all in one YAML file.
+    "hints": {
+        "enabled": True,
+        "file": str(Path.home() / ".smugvision" / "hints.yaml"),
+    },
     # Prompt Configuration
     "prompts": {
+        # The "who is doing what" clause is load-bearing. Without it, models reach for the
+        # socially plausible reading over the visible one: a photo of a man holding a dog
+        # chew with the dog biting the other end was captioned "sharing a snack with his
+        # black dog" in 6 of 6 runs, and once as the man "enjoying a snack". With the
+        # clause it became "holds a long snack for his black dog to eat", 6 of 6.
         "caption": (
             "You are a photo captioning assistant. Write exactly ONE caption (1-2 sentences) "
             "for this image. Describe the main subject, setting, and activity. "
+            "Describe only what is visibly happening. Be precise about who is doing what: "
+            "if a person is holding or offering an object to an animal or another person, "
+            "say so rather than implying they share it or use it themselves. "
             "IMPORTANT: Output ONLY the caption text. No options, no explanations, no "
             "introductions like 'Here is...' - just the caption itself."
+        ),
+        # Only used when processing.generate_titles is on. SmugMug titles show in album
+        # grids, so this asks for a label rather than a sentence - an over-long title is
+        # worse than none, and the vision layer discards anything above 120 chars.
+        "title": (
+            "Also give a very short title for this image: 3-6 words, like a label in a "
+            "photo album. Not a sentence. No trailing punctuation."
         ),
         "tags": (
             "Output a comma-separated list of 5-10 keyword tags for this image. "
@@ -64,14 +139,12 @@ DEFAULT_CONFIG = {
             "no numbering, no extra text. Example output: dog, playing, park, sunny, happy"
         ),
     },
-    
     # Cache Configuration
     "cache": {
         "directory": str(Path.home() / ".smugvision" / "cache"),
         "clear_on_exit": False,
         "preserve_structure": True,
     },
-    
     # Logging Configuration
     "logging": {
         "level": "INFO",
@@ -95,4 +168,3 @@ FIELD_DESCRIPTIONS = {
     "smugmug.user_token": "SmugMug User OAuth Token",
     "smugmug.user_secret": "SmugMug User OAuth Secret",
 }
-

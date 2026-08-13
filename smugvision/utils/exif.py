@@ -1,10 +1,12 @@
 """EXIF data extraction utilities for images."""
 
 import logging
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from math import radians, cos, sin, asin, sqrt
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List
 
 from PIL import Image
 from PIL.ExifTags import GPS, TAGS
@@ -472,26 +474,159 @@ def _search_nearby_venues_overpass(
         return []
 
 
+# Decimal places used to build the geocode cache key. 4 places is ~11m at the equator,
+# so only near-identical points collapse together: coarser rounding would risk labelling
+# a photo with a neighbouring venue's name, which is worse than an extra lookup.
+GEOCODE_CACHE_PRECISION = 4
+
+# Upper bound on cached coordinates. An album shot in one place needs a single entry;
+# the cap only matters for long-lived processes (the web UI) walking many albums.
+GEOCODE_CACHE_MAX_ENTRIES = 2048
+
+# Process-lifetime cache of resolved place names, keyed on rounded coordinates.
+# Insertion-ordered so the oldest entry can be evicted once the cap is reached.
+_geocode_cache: "OrderedDict[Tuple[float, float], Optional[str]]" = OrderedDict()
+_geocode_cache_lock = threading.Lock()
+_geocode_cache_hits = 0
+_geocode_cache_misses = 0
+
+
+def _geocode_cache_key(latitude: float, longitude: float) -> Tuple[float, float]:
+    """Build the cache key for a coordinate pair.
+
+    Args:
+        latitude: Latitude in decimal degrees
+        longitude: Longitude in decimal degrees
+
+    Returns:
+        Rounded (latitude, longitude) tuple used as the cache key
+    """
+    return (
+        round(latitude, GEOCODE_CACHE_PRECISION),
+        round(longitude, GEOCODE_CACHE_PRECISION),
+    )
+
+
+def clear_geocode_cache() -> None:
+    """Drop every cached reverse-geocoding result and reset the hit/miss counters.
+
+    Useful in tests, and for a long-running process that wants to pick up changed
+    OpenStreetMap data without a restart.
+    """
+    global _geocode_cache_hits, _geocode_cache_misses
+    with _geocode_cache_lock:
+        _geocode_cache.clear()
+        _geocode_cache_hits = 0
+        _geocode_cache_misses = 0
+    logger.debug("Geocode cache cleared")
+
+
+def geocode_cache_info() -> Dict[str, Any]:
+    """Report reverse-geocoding cache statistics.
+
+    Returns:
+        Dict with ``entries``, ``hits``, ``misses``, ``max_entries`` and ``precision``
+    """
+    with _geocode_cache_lock:
+        return {
+            "entries": len(_geocode_cache),
+            "hits": _geocode_cache_hits,
+            "misses": _geocode_cache_misses,
+            "max_entries": GEOCODE_CACHE_MAX_ENTRIES,
+            "precision": GEOCODE_CACHE_PRECISION,
+        }
+
+
 def reverse_geocode(
     latitude: float,
     longitude: float,
     interactive: bool = False
 ) -> Optional[str]:
-    """Convert GPS coordinates to a human-readable location name.
-    
-    This function attempts reverse geocoding using available services.
-    Falls back gracefully if geocoding is unavailable. Tries to get
-    the most specific location possible, including business/venue names.
-    
+    """Convert GPS coordinates to a human-readable location name, with caching.
+
+    Results are memoized for the life of the process against coordinates rounded to
+    ``GEOCODE_CACHE_PRECISION`` decimal places. Without this, an album shot at one
+    venue issued a fresh Nominatim reverse call -- plus an Overpass POI query -- for
+    every single photo, which for a 40-photo album is 40x the network time and 40x the
+    load on a service whose usage policy asks for one request per second. In
+    interactive mode it also means the venue prompt appears once per location instead
+    of once per photo.
+
+    Failures are cached too: a coordinate that cannot be resolved would otherwise
+    re-attempt (and re-time-out) on every remaining photo in the album. Call
+    :func:`clear_geocode_cache` to retry after a transient outage.
+
     Args:
         latitude: Latitude in decimal degrees
         longitude: Longitude in decimal degrees
         interactive: If True and multiple venues found, prompt user to select
-        
+
     Returns:
         Location name string (e.g., "The Louisville Palace Theater, Louisville, Kentucky"),
         or None if geocoding fails
-        
+
+    Note:
+        The cache is keyed on coordinates only, not on ``interactive``. A single run
+        uses one mode throughout, and reusing a location the user already chose is the
+        point; a process that mixes modes will reuse whichever result was resolved first.
+
+        Access is lock-guarded, but the lock is released while a lookup is in flight, so
+        threads racing on the *same* uncached coordinate may each resolve it once before
+        either stores a result. That is a wasted request, never a wrong answer, and the
+        pipeline processes an album's images sequentially, so it does not arise in
+        practice. Deduplicating in-flight lookups would need per-key locks; the
+        complexity is not worth it for a case the callers do not produce.
+    """
+    global _geocode_cache_hits, _geocode_cache_misses
+
+    key = _geocode_cache_key(latitude, longitude)
+
+    with _geocode_cache_lock:
+        if key in _geocode_cache:
+            _geocode_cache.move_to_end(key)
+            _geocode_cache_hits += 1
+            cached = _geocode_cache[key]
+            logger.debug(
+                f"Geocode cache hit for {key[0]:.4f}, {key[1]:.4f}: "
+                f"{cached if cached else '(unresolved)'}"
+            )
+            return cached
+        _geocode_cache_misses += 1
+
+    # Resolve outside the lock: this makes network calls and may prompt the user, and
+    # holding the lock across that would serialize every caller behind one lookup.
+    location_str = _reverse_geocode_uncached(latitude, longitude, interactive=interactive)
+
+    with _geocode_cache_lock:
+        _geocode_cache[key] = location_str
+        _geocode_cache.move_to_end(key)
+        while len(_geocode_cache) > GEOCODE_CACHE_MAX_ENTRIES:
+            evicted, _ = _geocode_cache.popitem(last=False)
+            logger.debug(f"Geocode cache full, evicted {evicted}")
+
+    return location_str
+
+
+def _reverse_geocode_uncached(
+    latitude: float,
+    longitude: float,
+    interactive: bool = False
+) -> Optional[str]:
+    """Reverse geocode a coordinate pair, hitting the network every time.
+
+    The uncached implementation behind :func:`reverse_geocode`. Falls back gracefully
+    if geocoding is unavailable. Tries to get the most specific location possible,
+    including business/venue names.
+
+    Args:
+        latitude: Latitude in decimal degrees
+        longitude: Longitude in decimal degrees
+        interactive: If True and multiple venues found, prompt user to select
+
+    Returns:
+        Location name string (e.g., "The Louisville Palace Theater, Louisville, Kentucky"),
+        or None if geocoding fails
+
     Note:
         This implementation uses Nominatim (OpenStreetMap) via geopy.
         For production use, consider using a dedicated geocoding service.
