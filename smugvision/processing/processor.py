@@ -1,7 +1,7 @@
 """Main image processing orchestrator."""
 
 import gc
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from pathlib import Path
 from dataclasses import dataclass
 import logging
@@ -15,6 +15,7 @@ from ..vision.base import VisionModel
 from ..utils.exif import extract_exif_location, resolve_location_with_custom
 from ..face.recognizer import FaceRecognizer
 from .hints import HintManager
+from .pets import get_pet_manager
 from .metadata import MetadataFormatter
 
 logger = logging.getLogger(__name__)
@@ -578,11 +579,23 @@ class ImageProcessor:
             # images fetched one at a time via SmugMugClient.get_image(), which would
             # make per-album hints vanish in exactly the single-image re-run path.
             hints_text = ""
+            pet_names: List[str] = []
             if self.hints:
                 try:
                     hints_text = self.hints.resolve(album.album_key, image.image_key)
                 except Exception as e:
                     logger.warning(f"Could not resolve hints for {image.file_name}: {e}")
+
+                # Pets ride in on the hint text rather than on person_names: an animal
+                # is not a detected face, and calling it one would corrupt the "N people
+                # visible" arithmetic the prompt is built from. Their descriptions are
+                # already the ground-truth sentences the user wrote, which is exactly
+                # what a hint is, so no new prompt plumbing is needed.
+                pet_names, pet_facts = self._resolve_pets(album.album_key, image.image_key)
+                if pet_facts:
+                    hints_text = " ".join(part for part in [hints_text, *pet_facts] if part)
+                    logger.info(f"  Pets: {', '.join(pet_names)}")
+
                 if hints_text:
                     logger.info(f"  Hints applied: {hints_text}")
 
@@ -646,6 +659,7 @@ class ImageProcessor:
                 existing_tags=existing_keywords,
                 person_names=person_names,
                 location_tags=location_tags,
+                pet_names=pet_names,
             )
 
             # Store the generated metadata in the result for inspection/UI
@@ -740,6 +754,41 @@ class ImageProcessor:
             True if the marker tag is present in the image's keywords
         """
         return image.has_marker_tag(marker_tag)
+
+    def _resolve_pets(
+        self, album_key: Optional[str], image_key: Optional[str]
+    ) -> Tuple[List[str], List[str]]:
+        """Resolve the pets named for one image into names and description sentences.
+
+        A pet ticked in the UI but since deleted from pets.yaml is dropped rather than
+        guessed at: its bare name in the prompt would tell the model nothing about what
+        it is, and would still land in the keywords.
+
+        Args:
+            album_key: Parent album key, for the album scope
+            image_key: Image key, for the image scope
+
+        Returns:
+            Tuple of (pet names that still exist, their description sentences)
+        """
+        if not self.hints:
+            return [], []
+
+        try:
+            named = self.hints.resolve_pets(album_key, image_key)
+        except Exception as e:
+            logger.warning(f"Could not resolve pets: {e}")
+            return [], []
+
+        if not named:
+            return [], []
+
+        try:
+            pets = get_pet_manager()
+            return pets.known(named), pets.facts_for(named)
+        except Exception as e:
+            logger.warning(f"Could not read pets.yaml: {e}")
+            return [], []
 
     def _count_detected_faces(self, image_path: str, recognized_count: int) -> int:
         """Count the faces detected in an image, including unrecognized ones.

@@ -37,6 +37,19 @@
         dom.addStatus = document.getElementById('add-status');
         dom.addBtn = document.getElementById('add-btn');
 
+        dom.petsList = document.getElementById('pets-list');
+        dom.petsStatus = document.getElementById('pets-status');
+        dom.petForm = document.getElementById('pet-form');
+        dom.petName = document.getElementById('pet-name');
+        dom.petDescription = document.getElementById('pet-description');
+        dom.petStatus = document.getElementById('pet-status');
+        dom.petSaveBtn = document.getElementById('pet-save-btn');
+
+        dom.petForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            savePet();
+        });
+
         dom.globalBtn.addEventListener('click', saveGlobal);
         dom.addForm.addEventListener('submit', function (event) {
             event.preventDefault();
@@ -44,7 +57,112 @@
         });
 
         load();
+        loadPets();
     });
+
+    /* -------------------------------------------------------------- *
+     * Pets: the vocabulary the proof sheet ticks against
+     * -------------------------------------------------------------- */
+
+    async function loadPets() {
+        let data;
+        try {
+            data = await S.apiGet('/api/pets');
+        } catch (error) {
+            S.setChildren(dom.petsList, [
+                el('p', {className: 'notice error', text: error.message})
+            ]);
+            return;
+        }
+        renderPets(data.pets || []);
+    }
+
+    function renderPets(pets) {
+        if (!pets.length) {
+            S.setChildren(dom.petsList, [
+                el('p', {
+                    className: 'muted',
+                    text: 'No pets yet. Add one below and it appears on every proof ' +
+                          'sheet, ready to tick.'
+                })
+            ]);
+            S.announce(dom.petsStatus, 'No pets configured.');
+            return;
+        }
+
+        S.setChildren(dom.petsList, [
+            el('ul', {className: 'pet-list'}, pets.map(function (pet) {
+                const remove = el('button', {
+                    type: 'button',
+                    className: 'secondary',
+                    text: 'Remove',
+                    'aria-label': 'Remove ' + pet.name
+                });
+                remove.addEventListener('click', function () {
+                    removePet(pet.name, remove);
+                });
+                /* Clicking the name loads it into the form, so editing a description is
+                   "save over it" rather than "delete and retype". */
+                const edit = el('button', {
+                    type: 'button',
+                    className: 'link-button pet-name',
+                    text: pet.name,
+                    title: 'Edit ' + pet.name
+                });
+                edit.addEventListener('click', function () {
+                    dom.petName.value = pet.name;
+                    dom.petDescription.value = pet.description;
+                    dom.petDescription.focus();
+                });
+                return el('li', {}, [
+                    edit,
+                    el('span', {className: 'pet-fact', text: pet.description}),
+                    remove
+                ]);
+            }))
+        ]);
+        S.announce(dom.petsStatus, S.plural(pets.length, 'pet') + ' configured.');
+    }
+
+    async function savePet() {
+        const name = dom.petName.value.trim();
+        const description = dom.petDescription.value.trim();
+
+        if (!name || !description) {
+            S.announce(
+                dom.petStatus,
+                'A pet needs both a name and a description.',
+                'error'
+            );
+            return;
+        }
+
+        const restore = S.busy(dom.petSaveBtn, 'Saving pet');
+        try {
+            await S.apiPut('/api/pets', {name: name, description: description});
+            dom.petName.value = '';
+            dom.petDescription.value = '';
+            S.announce(dom.petStatus, 'Saved ' + name + '.', 'ok');
+            await loadPets();
+        } catch (error) {
+            S.announce(dom.petStatus, error.message, 'error');
+        } finally {
+            restore();
+        }
+    }
+
+    async function removePet(name, button) {
+        const restore = S.busy(button, 'Removing pet');
+        try {
+            await S.apiDelete('/api/pets/' + encodeURIComponent(name));
+            S.announce(dom.petStatus, 'Removed ' + name + '.', 'ok');
+            await loadPets();
+        } catch (error) {
+            S.announce(dom.petStatus, error.message, 'error');
+        } finally {
+            restore();
+        }
+    }
 
     async function load() {
         let data;

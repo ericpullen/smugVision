@@ -74,6 +74,49 @@
     </div>
 </article>
 
+<!-- Pets: named once here, then ticked per photo on a proof sheet. -->
+<article>
+    <header>
+        <h2>Pets</h2>
+        <p>
+            Face recognition learns human faces from reference photos, so an animal is
+            invisible to it however often it appears. Name your pets here and they
+            become tickable on every frame of a proof sheet, next to the people.
+        </p>
+    </header>
+
+    <p class="visually-hidden" id="pets-status" role="status" aria-live="polite"></p>
+    <div id="pets-list">
+        <p class="muted">Loading pets…</p>
+    </div>
+
+    <form id="pet-form" novalidate>
+        <div class="field">
+            <label for="pet-name">Name</label>
+            <input type="text" id="pet-name" autocomplete="off" spellcheck="false"
+                   placeholder="Biscuit">
+            <p class="field-hint">
+                Also added as a keyword on any photo you tick this pet for.
+            </p>
+        </div>
+
+        <div class="field">
+            <label for="pet-description">What the model should be told</label>
+            <textarea id="pet-description" rows="2"
+                      placeholder="This is Biscuit, a Charcoal Labrador, and the family pet."></textarea>
+            <p class="field-hint">
+                Written out as a sentence, because this is handed to the model verbatim
+                as a fact it must accept. Say the breed, the name, and whose pet it is.
+            </p>
+        </div>
+
+        <div class="button-row">
+            <button type="submit" id="pet-save-btn">Save pet</button>
+            <span class="note-status" id="pet-status" role="status" aria-live="polite"></span>
+        </div>
+    </form>
+</article>
+
 <!-- Add by key, for when you are not looking at a proof sheet. -->
 <article>
     <header>

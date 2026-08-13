@@ -1,0 +1,22 @@
+# smugVision pets - example
+#
+# Copy to ~/.smugvision/pets.yaml, or add pets from the web UI on the Hints page.
+#
+# Face recognition learns human faces from the photos under reference_faces/, so an
+# animal is invisible to it no matter how often it appears. Pets close that gap: name
+# one here and it becomes tickable on every frame of a proof sheet, beside the people.
+#
+# The value is the exact sentence handed to the vision model as ground truth, which it
+# must accept over its own guess. Write it the way you want it said - the breed, the
+# name, and whose pet it is - because a model told only "Biscuit" will invent the rest.
+#
+# The key is also added as a keyword on any photo the pet is ticked for, so it is
+# searchable on SmugMug afterwards.
+
+pets:
+  Biscuit: This is Biscuit, a Charcoal Labrador, and the family pet.
+  Pepper: This is Pepper, the family Lionhead Black bunny.
+
+  # A pet that is not yours is worth spelling out, so a caption does not adopt it into
+  # the family:
+  # Scout: This is Scout, a dog belonging to Sam and Casey rather than to us.

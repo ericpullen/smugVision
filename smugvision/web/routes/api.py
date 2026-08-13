@@ -14,6 +14,7 @@ from ...smugmug import (
     SmugMugNotFoundError,
     SmugMugRateLimitError,
 )
+from ...processing.pets import get_pet_manager
 from ..services.preview import (
     ConfirmationRequiredError,
     ImageNotInJobError,
@@ -126,6 +127,80 @@ def list_galleries():
         return jsonify({"error": message}), status
     except Exception as e:
         logger.error(f"Failed to list galleries for node {node_id}: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/pets", methods=["GET"])
+def list_pets():
+    """List the user's configured pets.
+
+    Pets are the subjects face recognition can never learn, so they are named by hand
+    once and then ticked per photo.
+
+    Returns:
+        ``{"pets": [{"name": str, "description": str}], "total": int}``
+    """
+    try:
+        pets = get_pet_manager().all_pets()
+        return jsonify({
+            "pets": [
+                {"name": name, "description": pets[name]} for name in sorted(pets)
+            ],
+            "total": len(pets),
+        })
+    except Exception as e:
+        logger.error(f"Failed to list pets: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/pets", methods=["PUT"])
+def save_pet():
+    """Add or update one pet.
+
+    Request body:
+        ``{"name": "Biscuit", "description": "This is Biscuit, a Charcoal Labrador, and
+        the family pet."}``
+
+    The description is the exact sentence handed to the vision model as ground truth,
+    so it is stored verbatim rather than assembled from fields.
+
+    Returns:
+        The stored pet
+    """
+    data = _json_body()
+    name = _string_field(data, "name")
+    description = _string_field(data, "description")
+
+    try:
+        stored = get_pet_manager().set_pet(name, description)
+        return jsonify({"name": stored, "description": description.strip()})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Failed to save pet: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/pets/<path:pet_name>", methods=["DELETE"])
+def delete_pet(pet_name: str):
+    """Remove one pet.
+
+    Photos that still name it keep the name in hints.yaml; it simply stops
+    contributing a sentence, so re-adding the pet restores those photos.
+
+    Args:
+        pet_name: Pet to remove
+
+    Returns:
+        ``{"removed": bool, "name": str}``
+    """
+    try:
+        removed = get_pet_manager().remove_pet(pet_name)
+        if not removed:
+            return jsonify({"error": f"No pet named '{pet_name}'"}), 404
+        return jsonify({"removed": True, "name": pet_name.strip()})
+    except Exception as e:
+        logger.error(f"Failed to delete pet {pet_name}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -360,6 +435,8 @@ def _job_hints(service: PreviewService, job) -> Dict[str, Any]:
         "image_locations": {},
         "album_people": [],
         "image_people": {},
+        "album_pets": [],
+        "image_pets": {},
     }
 
     manager = service.hints
@@ -377,6 +454,8 @@ def _job_hints(service: PreviewService, job) -> Dict[str, Any]:
     image_locations = locations.get("images", {})
     people = stored.get("people", {})
     image_people = people.get("images", {})
+    pets = stored.get("pets", {})
+    image_pets = pets.get("images", {})
     return {
         "enabled": True,
         "global": stored.get("global", ""),
@@ -393,6 +472,11 @@ def _job_hints(service: PreviewService, job) -> Dict[str, Any]:
         "album_people": list(people.get("albums", {}).get(job.album_key, [])),
         "image_people": {
             result.image_key: list(image_people.get(result.image_key, []))
+            for result in job.results
+        },
+        "album_pets": list(pets.get("albums", {}).get(job.album_key, [])),
+        "image_pets": {
+            result.image_key: list(image_pets.get(result.image_key, []))
             for result in job.results
         },
     }
@@ -542,6 +626,8 @@ def put_hint():
     # empty clears it.
     has_people = "people" in data
     people = data.get("people")
+    has_pets = "pets" in data
+    pets = data.get("pets")
 
     if not scope:
         return jsonify({"error": "Missing 'scope' in request body"}), 400
@@ -551,6 +637,8 @@ def put_hint():
         return jsonify({"error": "'location' must be a string"}), 400
     if has_people and people is not None and not isinstance(people, list):
         return jsonify({"error": "'people' must be a list of reference-face names"}), 400
+    if has_pets and pets is not None and not isinstance(pets, list):
+        return jsonify({"error": "'pets' must be a list of pet names"}), 400
 
     try:
         service = get_preview_service()
@@ -568,6 +656,8 @@ def put_hint():
             manager.set_location(scope, location, key)
         if has_people:
             manager.set_people(scope, people, key)
+        if has_pets:
+            manager.set_pets(scope, pets, key)
 
         normalized = scope.strip().lower()
         stored = manager.get_all()
@@ -584,6 +674,7 @@ def put_hint():
         stored_people = (
             stored.get("people", {}).get(section, {}).get(key, []) if key else []
         )
+        stored_pets = stored.get("pets", {}).get(section, {}).get(key, []) if key else []
 
         return jsonify({
             "scope": normalized,
@@ -591,6 +682,7 @@ def put_hint():
             "text": value,
             "location": stored_location,
             "people": stored_people,
+            "pets": stored_pets,
             "cleared": not value,
             "count": manager.hint_count,
         })

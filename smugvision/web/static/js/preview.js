@@ -32,6 +32,8 @@
     let committed = false;
     let knownFaces = [];      // [{name, display_name, reference_count}] for the picker
     let albumPicker = null;   // album-scope people picker, built after results load
+    let albumPetPicker = null;    // album-scope pet picker
+    let knownPets = [];           // [{name, description}] from pets.yaml
     let pendingWriteKeys = null;  // image keys the open confirm dialog named
     let regenerating = 0;         // in-flight single-frame re-reads
     let sweeping = false;         // an album-wide re-read is running
@@ -131,6 +133,15 @@
             knownFaces = [];
         }
 
+        // Pets are optional and independent: failing to read them must not cost the
+        // people picker or the proof sheet.
+        try {
+            const petData = await S.apiGet('/api/pets');
+            knownPets = (petData && petData.pets) || [];
+        } catch (error) {
+            knownPets = [];
+        }
+
         albumKey = data.album_key;
         albumName = data.album_name;
         images = data.images || [];
@@ -204,7 +215,12 @@
             'Who is in this album?',
             'album-people-hint'
         );
-        S.setChildren(dom.albumPeople, [albumPicker.node]);
+        albumPetPicker = buildPetPicker(
+            'album-who',
+            hints.album_pets || [],
+            'Any pets in this album?'
+        );
+        S.setChildren(dom.albumPeople, [albumPicker.node, albumPetPicker.node]);
         syncAlbumPeopleDrawer();
 
         if (hints.global) {
@@ -257,13 +273,15 @@
             key: albumKey,
             text: dom.albumHint.value,
             location: dom.albumLocation.value,
-            people: albumPicker ? albumPicker.selected() : []
+            people: albumPicker ? albumPicker.selected() : [],
+            pets: albumPetPicker ? albumPetPicker.selected() : []
         });
         hints.album = result.text;
         dom.albumHint.value = result.text;
         hints.album_location = result.location || '';
         dom.albumLocation.value = hints.album_location;
         hints.album_people = result.people || [];
+        hints.album_pets = result.pets || [];
         syncAlbumPeopleDrawer();
         return result;
     }
@@ -709,7 +727,11 @@
                 type: 'checkbox',
                 id: id,
                 value: face.name,
-                className: 'visually-hidden'
+                /* Hidden only on a tile, where the whole tile is the control and the
+                   checked state is drawn on the frame. A drawer row is a plain list, so
+                   it keeps its real checkbox: hiding that left a row that ticked
+                   silently and looked identical either way. */
+                className: tile ? 'visually-hidden' : ''
             });
             box.checked = !!chosen[face.name];
             box.addEventListener('change', function () {
@@ -806,6 +828,74 @@
         return picker;
     }
 
+    /* -------------------------------------------------------------- *
+     * Pets: the subjects recognition can never learn
+     * -------------------------------------------------------------- */
+
+    /**
+     * Build a pet picker: one chip per configured pet.
+     *
+     * Separate from the people picker on purpose. A pet has no reference face and must
+     * never be counted as one, so ticking Biscuit adds his description to the prompt as
+     * ground truth and his name to the keywords - it does not claim a face was found.
+     *
+     * @param {string} idPrefix unique per picker instance
+     * @param {Array<string>} selected pet names already stored for this scope
+     * @param {string} legendText fieldset legend
+     * @returns {{node: Element, selected: function(): Array<string>}}
+     */
+    function buildPetPicker(idPrefix, selected, legendText) {
+        const chosen = {};
+        (selected || []).forEach(function (name) { chosen[name] = true; });
+
+        if (!knownPets.length) {
+            /* Still say the feature exists: a pet nobody has defined is invisible
+               otherwise, and the place to define one is not on this page. */
+            return {
+                node: el('p', {className: 'field-hint'}, [
+                    document.createTextNode('No pets set up yet. '),
+                    el('a', {href: '/hints', text: 'Add a pet'}),
+                    document.createTextNode(
+                        ' to tick it here - useful for animals, which face recognition ' +
+                        'can never learn.'
+                    )
+                ]),
+                selected: function () { return []; }
+            };
+        }
+
+        const chips = knownPets.map(function (pet) {
+            const id = idPrefix + '-pet-' + pet.name;
+            const box = el('input', {
+                type: 'checkbox',
+                id: id,
+                value: pet.name,
+                className: 'visually-hidden'
+            });
+            box.checked = !!chosen[pet.name];
+            box.addEventListener('change', function () {
+                chosen[pet.name] = box.checked;
+            });
+            return el('div', {className: 'pet-item'}, [
+                box,
+                el('label', {for: id, title: pet.description, text: pet.name})
+            ]);
+        });
+
+        const fieldset = el('fieldset', {className: 'people-picker pet-picker'}, [
+            el('legend', {text: legendText})
+        ].concat([el('div', {className: 'pet-chips'}, chips)]));
+
+        return {
+            node: fieldset,
+            selected: function () {
+                return knownPets
+                    .map(function (pet) { return pet.name; })
+                    .filter(function (name) { return chosen[name]; });
+            }
+        };
+    }
+
     function buildMarginNote(image) {
         const textareaId = 'hint-' + image.image_key;
         const locationId = 'hint-loc-' + image.image_key;
@@ -839,6 +929,12 @@
             hintId
         );
 
+        const petPicker = buildPetPicker(
+            'who-' + image.image_key,
+            (hints.image_pets && hints.image_pets[image.image_key]) || [],
+            'Any pets in this frame?'
+        );
+
         const status = el('p', {
             className: 'note-status',
             id: statusId,
@@ -852,7 +948,9 @@
             text: 'Save note & re-read'
         });
         button.addEventListener('click', function () {
-            regenerate(image.image_key, textarea, locationInput, picker, status, button);
+            regenerate(
+                image.image_key, textarea, locationInput, picker, petPicker, status, button
+            );
         });
 
         return el('div', {className: 'margin-note'}, [
@@ -885,6 +983,7 @@
                       'and feeds the caption and the keywords. Leave all unticked to ' +
                       'trust the recogniser.'
             }),
+            petPicker.node,
             el('div', {className: 'note-actions'}, [button, status])
         ]);
     }
@@ -899,11 +998,15 @@
      * dialog makes the rest of the page inert, so no re-read can start while
      * it is open.
      */
-    async function regenerate(imageKey, textarea, locationInput, picker, status, button) {
+    async function regenerate(
+        imageKey, textarea, locationInput, picker, petPicker, status, button
+    ) {
         regenerating += 1;
         syncWriteButton();
         try {
-            await regenerateFrame(imageKey, textarea, locationInput, picker, status, button);
+            await regenerateFrame(
+                imageKey, textarea, locationInput, picker, petPicker, status, button
+            );
         } finally {
             regenerating -= 1;
             syncWriteButton();
@@ -914,7 +1017,9 @@
      * Save the image-scope hint, then re-run that one image.
      * Only this card shows a spinner and only this card is replaced.
      */
-    async function regenerateFrame(imageKey, textarea, locationInput, picker, status, button) {
+    async function regenerateFrame(
+        imageKey, textarea, locationInput, picker, petPicker, status, button
+    ) {
         const card = dom.grid.querySelector(
             '.image-card[data-image-key="' + cssEscape(imageKey) + '"]'
         );
@@ -928,7 +1033,8 @@
                 key: imageKey,
                 text: textarea.value,
                 location: locationInput.value,
-                people: picker.selected()
+                people: picker.selected(),
+                pets: petPicker.selected()
             });
             hints.images[imageKey] = textarea.value.trim();
             if (!hints.image_locations) {
@@ -939,6 +1045,10 @@
                 hints.image_people = {};
             }
             hints.image_people[imageKey] = picker.selected();
+            if (!hints.image_pets) {
+                hints.image_pets = {};
+            }
+            hints.image_pets[imageKey] = petPicker.selected();
         } catch (error) {
             S.announce(status, 'Could not save the note: ' + error.message, 'error');
             setCardBusy(card, false);

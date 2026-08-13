@@ -111,6 +111,7 @@ class MetadataFormatter:
         existing_tags: Optional[List[str]] = None,
         person_names: Optional[List[str]] = None,
         location_tags: Optional[List[str]] = None,
+        pet_names: Optional[List[str]] = None,
     ) -> List[str]:
         """Format final tag list combining all sources.
 
@@ -119,6 +120,8 @@ class MetadataFormatter:
             existing_tags: Existing tags from SmugMug
             person_names: Person names to add as tags
             location_tags: Location-based tags (city, state, venue name)
+            pet_names: Pet names to add as tags. Separate from person_names so a pet is
+                never fed to anything that reasons about faces or people.
 
         Returns:
             List of unique tags
@@ -136,6 +139,10 @@ class MetadataFormatter:
         # Add person name tags
         if person_names:
             tags.extend(person_names)
+
+        # Add pet name tags
+        if pet_names:
+            tags.extend(pet_names)
 
         # Add location tags
         if location_tags:

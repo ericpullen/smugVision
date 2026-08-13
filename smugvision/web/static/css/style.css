@@ -2049,6 +2049,19 @@ dialog#confirm-write-modal {
     outline-offset: 2px;
 }
 
+/* A ticked drawer row has to look ticked. The native checkbox carries most of that,
+   but the name changing weight and colour is what you notice while scanning a list of
+   twelve. */
+.picker-item:not(.is-tile) input:checked + label {
+    color: var(--accent-ink);
+    font-weight: 650;
+}
+
+.picker-item:not(.is-tile) input:checked + label .picker-face {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 1px;
+}
+
 /* --- Tiles in the top row ------------------------------------------------ */
 
 .picker-item.is-tile {
@@ -2133,6 +2146,96 @@ dialog#confirm-write-modal {
 
 .album-people-drawer > summary {
     cursor: pointer;
+}
+
+/* --- Pets --------------------------------------------------------- *
+   A pet has no reference face, so there is no thumbnail to click: the name IS the
+   control. Chips rather than a checkbox list, because there are only ever a few. */
+.pet-picker {
+    margin-top: 0.5rem;
+}
+
+.pet-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+
+.pet-item label {
+    display: inline-block;
+    cursor: pointer;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    font-size: 0.85rem;
+    line-height: 1.2;
+}
+
+.pet-item label:hover {
+    background: var(--slip);
+}
+
+/* Same lesson as the drawer rows: a hidden checkbox needs the checked state drawn
+   somewhere, or ticking looks like nothing happened. */
+.pet-item input:checked + label {
+    border-color: var(--accent-ink);
+    background: var(--accent-wash);
+    color: var(--accent-ink);
+    font-weight: 650;
+}
+
+.pet-item input:focus-visible + label {
+    outline: 2px solid var(--focus, #6cf);
+    outline-offset: 2px;
+}
+
+/* --- Pets editor on the hints page ------------------------------- */
+
+.pet-list {
+    list-style: none;
+    margin: 0 0 var(--s4);
+    padding: 0;
+}
+
+.pet-list li {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s3);
+    padding: var(--s2) 0;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.pet-list .pet-name {
+    flex: none;
+    font-weight: 650;
+    min-width: 7rem;
+}
+
+/* A button that reads as a link, for an action that navigates the form rather than
+   doing something to the data. */
+.link-button {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    text-align: left;
+    color: var(--accent-ink);
+    text-decoration: underline;
+    text-decoration-color: var(--rule-strong);
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.link-button:hover {
+    text-decoration-color: currentColor;
+}
+
+.pet-list .pet-fact {
+    flex: 1 1 auto;
+    color: var(--ink-2);
+    font-size: 0.92rem;
+    overflow-wrap: anywhere;
 }
 
 /* An album-wide override affects every frame, so when one is set the drawer stops

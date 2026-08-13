@@ -112,6 +112,11 @@ async function apiPut(url, body) {
     return apiCall(url, {method: 'PUT', body: JSON.stringify(body || {})});
 }
 
+/** DELETE a resource. No body: the URL names what goes. */
+async function apiDelete(url) {
+    return apiCall(url, {method: 'DELETE'});
+}
+
 /* ------------------------------------------------------------------ *
  * DOM helpers
  * ------------------------------------------------------------------ */
@@ -210,6 +215,7 @@ window.smugvision = {
     apiGet: apiGet,
     apiPost: apiPost,
     apiPut: apiPut,
+    apiDelete: apiDelete,
     el: el,
     setChildren: setChildren,
     busy: busy,

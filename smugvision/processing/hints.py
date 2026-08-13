@@ -133,6 +133,10 @@ class HintManager:
         # reference_faces/ and matched by relationships.yaml.
         self._album_people: Dict[str, List[str]] = {}
         self._image_people: Dict[str, List[str]] = {}
+        # Pets: names from pets.yaml. Kept beside people rather than inside them so a
+        # dog is never counted as a detected face or announced as a person.
+        self._album_pets: Dict[str, List[str]] = {}
+        self._image_pets: Dict[str, List[str]] = {}
         self._mtime: Optional[float] = None
         self._loaded = False
 
@@ -228,6 +232,21 @@ class HintManager:
             )
             self._album_people = {}
             self._image_people = {}
+
+        pets = data.get("pets")
+        if pets is None:
+            self._album_pets = {}
+            self._image_pets = {}
+        elif isinstance(pets, dict):
+            self._album_pets = self._coerce_people_section(pets.get("albums"), "pets.albums")
+            self._image_pets = self._coerce_people_section(pets.get("images"), "pets.images")
+        else:
+            logger.warning(
+                f"Ignoring 'pets' in {self.hints_file}: expected a mapping with "
+                f"'albums' and/or 'images' keys, got {type(pets).__name__}"
+            )
+            self._album_pets = {}
+            self._image_pets = {}
 
         count = self.hint_count
         logger.debug(
@@ -423,6 +442,36 @@ class HintManager:
                 return list(names)
         return None
 
+    def resolve_pets(
+        self, album_key: Optional[str], image_key: Optional[str]
+    ) -> Optional[List[str]]:
+        """Resolve which pets are in a photo.
+
+        Scoping matches :meth:`resolve_people` exactly - the most specific scope wins
+        outright, an image list replaces an album one, and there is no global scope -
+        so there is one rule to learn for "who is in this picture" whether the answer
+        has two legs or four.
+
+        Args:
+            album_key: SmugMug album key, or ``None`` to skip the album scope
+            image_key: SmugMug image key, or ``None`` to skip the image scope
+
+        Returns:
+            Pet names as stored, or ``None`` when no pets are named for this photo.
+            Whether a name still exists in pets.yaml is not checked here.
+        """
+        self._ensure_fresh()
+
+        if image_key:
+            names = self._image_pets.get(str(image_key).strip())
+            if names:
+                return list(names)
+        if album_key:
+            names = self._album_pets.get(str(album_key).strip())
+            if names:
+                return list(names)
+        return None
+
     def resolve_location(self, album_key: Optional[str], image_key: Optional[str]) -> Optional[str]:
         """Resolve the location override that applies to one image.
 
@@ -507,6 +556,10 @@ class HintManager:
             "people": {
                 "albums": {k: list(v) for k, v in self._album_people.items()},
                 "images": {k: list(v) for k, v in self._image_people.items()},
+            },
+            "pets": {
+                "albums": {k: list(v) for k, v in self._album_pets.items()},
+                "images": {k: list(v) for k, v in self._image_pets.items()},
             },
         }
 
@@ -677,6 +730,70 @@ class HintManager:
         self._save()
         logger.info(f"Stored {scope} people override for {key}: {', '.join(clean)}")
 
+    def set_pets(self, scope: str, names: Optional[List[str]], key: Optional[str] = None) -> None:
+        """Store which pets are in a photo (or album) and persist it immediately.
+
+        An empty list or ``None`` clears the entry, so a UI clears it by submitting
+        nothing ticked.
+
+        Args:
+            scope: ``"album"`` or ``"image"``. ``"global"`` is rejected - the same pet
+                is not in every photo you have ever taken.
+            names: Pet names as defined in ``pets.yaml``. Order is preserved;
+                duplicates and blanks are dropped. Names are NOT checked against
+                pets.yaml here, so a pet can be ticked and defined in either order.
+            key: SmugMug album key or image key. Required.
+
+        Raises:
+            ValueError: If the scope is unknown or ``"global"``, ``key`` is missing, or
+                ``names`` is not a list of strings
+            RuntimeError: If PyYAML is unavailable, so the value cannot be persisted
+        """
+        scope, key = self._validate_scope(scope, key)
+        if scope == SCOPE_GLOBAL:
+            raise ValueError(
+                "A pet list needs an album or image scope; 'global' is not meaningful "
+                "for which pets are in a photo"
+            )
+
+        if names is None:
+            names = []
+        if isinstance(names, str) or not isinstance(names, (list, tuple)):
+            raise ValueError("'names' must be a list of pet names")
+
+        clean: List[str] = []
+        for candidate in names:
+            name = str(candidate).strip()
+            if name and name not in clean:
+                clean.append(name)
+
+        self._ensure_fresh()
+        section = self._album_pets if scope == SCOPE_ALBUM else self._image_pets
+
+        if not clean:
+            removed = section.pop(key, None) is not None
+            self._save()
+            if removed:
+                logger.info(f"Cleared {scope} pets for {key}")
+            return
+
+        section[key] = clean
+        self._save()
+        logger.info(f"Stored {scope} pets for {key}: {', '.join(clean)}")
+
+    def clear_pets(self, scope: str, key: Optional[str] = None) -> None:
+        """Remove a pet list and persist the removal immediately.
+
+        Args:
+            scope: ``"album"`` or ``"image"``
+            key: SmugMug album key or image key. Required.
+
+        Raises:
+            ValueError: If the scope is unknown or ``"global"``, or ``key`` is missing
+            RuntimeError: If PyYAML is unavailable
+        """
+        self.set_pets(scope, [], key)
+
     def clear_people(self, scope: str, key: Optional[str] = None) -> None:
         """Remove a people override and persist the removal immediately.
 
@@ -808,6 +925,10 @@ class HintManager:
             "people": {
                 "albums": {k: list(v) for k, v in sorted(self._album_people.items())},
                 "images": {k: list(v) for k, v in sorted(self._image_people.items())},
+            },
+            "pets": {
+                "albums": {k: list(v) for k, v in sorted(self._album_pets.items())},
+                "images": {k: list(v) for k, v in sorted(self._image_pets.items())},
             },
         }
 
