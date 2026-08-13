@@ -16,6 +16,7 @@ from smugvision.smugmug.models import (
     BrowseNode,
     NodeListing,
     NodeRef,
+    split_keywords,
 )
 from smugvision.smugmug.exceptions import (
     SmugMugAPIError,
@@ -934,6 +935,66 @@ class SmugMugClient:
         logger.debug(f"Retrieved album: {album.name} ({album.image_count} images)")
         return album
     
+    def get_album_image_keywords(self, album_key: str) -> List[List[str]]:
+        """Get just the keywords of an album's images, one list of tags per image.
+
+        A deliberately cheap alternative to :meth:`get_album_images` for callers that
+        only need to know what is tagged - answering "has this album been processed?"
+        should not pay for every image's download URLs and size variants.
+        ``_filter`` restricts the response to three fields, which measured ~0.24s for a
+        13-image album against ~1s for the full expansion.
+
+        Videos are omitted, matching what the processing pipeline considers an image.
+
+        Args:
+            album_key: Album key (unique identifier)
+
+        Returns:
+            List with one entry per non-video image, each the tags on that image
+            (already split, so a semicolon-joined blob arrives as separate tags)
+
+        Raises:
+            SmugMugAPIError: If request fails
+        """
+        logger.debug(f"Fetching keywords for album: {album_key}")
+
+        per_image: List[List[str]] = []
+        current_start = 1
+
+        while True:
+            response = self._request(
+                "GET",
+                f"/album/{album_key}!images",
+                params={
+                    "start": current_start,
+                    "count": 100,
+                    # KeywordArray is SmugMug's own split of the keyword string; Keywords
+                    # is the raw blob, kept as a fallback for images that predate it.
+                    "_filter": "KeywordArray,Keywords,IsVideo",
+                },
+            )
+
+            response_data = response.get("Response", {})
+            images_data = response_data.get("AlbumImage", [])
+            if not images_data:
+                break
+
+            for image_data in images_data:
+                if image_data.get("IsVideo"):
+                    continue
+                raw = image_data.get("KeywordArray")
+                if not raw:
+                    raw = [image_data.get("Keywords") or ""]
+                per_image.append(split_keywords(raw))
+
+            if not response_data.get("Pages", {}).get("NextPage"):
+                break
+
+            current_start += len(images_data)
+
+        logger.debug(f"Album {album_key}: read keywords for {len(per_image)} image(s)")
+        return per_image
+
     def get_album_images(
         self,
         album_key: str,

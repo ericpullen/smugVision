@@ -847,6 +847,41 @@ dl {
     color: var(--ink-3);
 }
 
+/* "Have I proofed this one?" - answered per album, after the list is drawn.
+   Deliberately quieter than the album name: it is a status, not the row's subject. */
+.catalog-row .row-proof {
+    flex: none;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.7rem;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    border-radius: var(--r-sm);
+    padding: 0.1rem 0.4rem;
+    color: var(--ink-4);
+}
+
+/* The states worth noticing carry colour; "not proofed" is the ordinary case and
+   stays muted so a folder of fresh albums does not light up. */
+.catalog-row .row-proof.is-proofed {
+    color: var(--added-ink);
+    background: color-mix(in srgb, var(--added-ink) 12%, transparent);
+}
+
+.catalog-row .row-proof.is-partial {
+    color: var(--caution);
+    background: var(--caution-wash);
+}
+
+.catalog-row .row-proof.is-checking {
+    opacity: 0.7;
+}
+
+.catalog-row .row-proof.is-unknown {
+    cursor: help;
+    text-decoration: underline dotted;
+}
+
 .catalog-row .row-go {
     flex: none;
     color: var(--ink-4);

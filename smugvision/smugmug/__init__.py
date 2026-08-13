@@ -12,6 +12,8 @@ from smugvision.smugmug.models import (
     BrowseNode,
     NodeListing,
     NodeRef,
+    keywords_contain,
+    split_keywords,
 )
 from smugvision.smugmug.exceptions import (
     SmugMugError,
@@ -33,6 +35,8 @@ __all__ = [
     "NODE_TYPE_ALBUM",
     "NODE_TYPE_SYSTEM_ALBUM",
     "ROOT_NODE_LABEL",
+    "split_keywords",
+    "keywords_contain",
     "SmugMugError",
     "SmugMugAPIError",
     "SmugMugAuthError",

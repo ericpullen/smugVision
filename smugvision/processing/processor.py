@@ -1,7 +1,6 @@
 """Main image processing orchestrator."""
 
 import gc
-import re
 from typing import List, Optional
 from pathlib import Path
 from dataclasses import dataclass
@@ -9,7 +8,7 @@ import logging
 import time
 
 from ..config import ConfigManager
-from ..smugmug import SmugMugClient, AlbumImage, Album
+from ..smugmug import SmugMugClient, AlbumImage, Album, split_keywords
 from ..cache import CacheManager
 from ..vision import VisionModelFactory
 from ..vision.base import VisionModel
@@ -695,10 +694,11 @@ class ImageProcessor:
         """Split SmugMug keyword strings into individual tags.
 
         SmugMug stores keywords as one string and hands it back SEMICOLON separated
-        ("dog; park; smugvision") even when it was written comma separated, but
-        AlbumImage.from_api_response only splits on commas. A previously written tag
-        list therefore arrives as a single blob, which hides the marker tag and
-        defeats deduplication. Splitting on both separators recovers the real tags.
+        ("dog; park; smugvision") even when it was written comma separated, so a
+        previously written tag list arrives as a single blob that hides the marker tag
+        and defeats deduplication. Delegates to :func:`smugvision.smugmug.split_keywords`
+        so the album scanner, which sees raw API values rather than AlbumImage objects,
+        applies exactly the same rule.
 
         Args:
             keywords: Keyword values as parsed from the SmugMug API (may be None)
@@ -706,16 +706,7 @@ class ImageProcessor:
         Returns:
             List of individual, non-empty tags in their original order
         """
-        if not keywords:
-            return []
-
-        split_tags: List[str] = []
-        for keyword in keywords:
-            for part in re.split(r"[;,]", str(keyword)):
-                part = part.strip()
-                if part:
-                    split_tags.append(part)
-        return split_tags
+        return split_keywords(keywords)
 
     def needs_processing(self, image: AlbumImage) -> bool:
         """Check whether an image still needs processing.
@@ -734,13 +725,12 @@ class ImageProcessor:
         marker_tag = self.config.get("processing.marker_tag", "smugvision")
         return not self._has_marker_tag(image, marker_tag)
 
-    def _has_marker_tag(self, image: AlbumImage, marker_tag: str) -> bool:
+    @staticmethod
+    def _has_marker_tag(image: AlbumImage, marker_tag: str) -> bool:
         """Check whether an image already carries the processing marker tag.
 
-        Falls back to a separator-aware check because SmugMug returns keywords as a
-        semicolon-separated blob, which makes AlbumImage.has_marker_tag() miss the
-        marker on every image smugVision has already processed. This only ever turns a
-        missed marker into a detected one, so it can add skips but never remove them.
+        AlbumImage.has_marker_tag() is separator-aware, so the blob SmugMug returns is
+        handled there rather than being worked around here.
 
         Args:
             image: AlbumImage to inspect
@@ -749,10 +739,7 @@ class ImageProcessor:
         Returns:
             True if the marker tag is present in the image's keywords
         """
-        if image.has_marker_tag(marker_tag):
-            return True
-        target = marker_tag.strip().lower()
-        return any(tag.lower() == target for tag in self._split_keywords(image.keywords))
+        return image.has_marker_tag(marker_tag)
 
     def _count_detected_faces(self, image_path: str, recognized_count: int) -> int:
         """Count the faces detected in an image, including unrecognized ones.

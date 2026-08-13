@@ -1,8 +1,9 @@
 """Data models for SmugMug API resources."""
 
 import logging
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,52 @@ NODE_TYPE_SYSTEM_ALBUM = "System Album"
 #: Label substituted for the root node, whose SmugMug ``Name`` is the empty
 #: string (its ``UrlPath`` is just ``/``).
 ROOT_NODE_LABEL = "All Galleries"
+
+
+#: SmugMug returns an image's keywords as one string joined with semicolons (and
+#: sometimes commas), so a "list of keywords" straight off the API is usually a list of
+#: one long blob. Anything comparing individual tags has to split on these first.
+KEYWORD_SEPARATORS = re.compile(r"[;,]")
+
+
+def split_keywords(keywords: Optional[Iterable[str]]) -> List[str]:
+    """Split SmugMug keyword values into individual tags.
+
+    Args:
+        keywords: Keyword values as parsed from the SmugMug API, which may be a single
+            semicolon-joined blob, already-separate tags, or None
+
+    Returns:
+        List of individual, non-empty tags in their original order
+    """
+    if not keywords:
+        return []
+
+    tags: List[str] = []
+    for keyword in keywords:
+        for part in KEYWORD_SEPARATORS.split(str(keyword)):
+            part = part.strip()
+            if part:
+                tags.append(part)
+    return tags
+
+
+def keywords_contain(keywords: Optional[Iterable[str]], target: str) -> bool:
+    """Check whether a keyword value holds one specific tag.
+
+    Compares whole tags, case-insensitively: ``car`` does not match ``car interior``.
+
+    Args:
+        keywords: Keyword values as parsed from the SmugMug API
+        target: The single tag to look for
+
+    Returns:
+        True if the tag is present
+    """
+    wanted = target.strip().lower()
+    if not wanted:
+        return False
+    return any(tag.lower() == wanted for tag in split_keywords(keywords))
 
 
 @dataclass
@@ -196,14 +243,18 @@ class AlbumImage:
     
     def has_marker_tag(self, marker_tag: str) -> bool:
         """Check if image has the specified marker tag.
-        
+
+        Separator-aware: SmugMug hands back the whole keyword list as one
+        semicolon-joined string, so comparing against ``self.keywords`` directly would
+        miss the marker on every image smugVision has already processed.
+
         Args:
             marker_tag: Tag to check for
-            
+
         Returns:
             True if marker tag exists in keywords
         """
-        return marker_tag.lower() in [k.lower() for k in self.keywords]
+        return keywords_contain(self.keywords, marker_tag)
     
     def get_download_url(self, size: str = "Medium") -> Optional[str]:
         """Get download URL for specified image size.

@@ -9,13 +9,14 @@ import time
 import uuid
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Generator, Any, Tuple
 from urllib.parse import urlparse
 
 from ...config import ConfigManager
-from ...smugmug import SmugMugClient, AlbumImage, Album
+from ...smugmug import SmugMugClient, AlbumImage, Album, keywords_contain
 from ...cache import CacheManager
 from ...processing import HintManager, ImageProcessor
 from ...face.recognizer import FaceRecognizer
@@ -30,6 +31,31 @@ logger = logging.getLogger(__name__)
 # the whole life of the server process.
 GALLERY_CACHE_TTL_SECONDS = 120
 GALLERY_CACHE_MAX_ENTRIES = 50
+
+# Reading an album's keywords costs one request per 100 images (~0.25-0.8s per album
+# measured), so a folder holding 19 albums and 1800 images takes ~5s to scan. That is
+# why the picker asks for proof state AFTER it has drawn the list, and why the answers
+# are cached: browsing back into a folder must not pay for the scan twice.
+#
+# The TTL exists only to notice edits made outside this process. SmugMug's
+# ImagesLastUpdated does NOT move when image metadata is PATCHed - an album written to
+# minutes ago still reports its original upload date - so there is no cheap timestamp to
+# validate against. Writes from THIS process invalidate their album explicitly, and
+# starting a run re-derives the state for free, but a second smugvision (another web
+# instance, or a CLI run) is invisible to both, and the TTL is all that heals it. Five
+# minutes keeps a browsing session cheap while bounding how long a badge can lie;
+# Refresh forces a re-scan immediately.
+PROOF_STATE_CACHE_TTL_SECONDS = 300
+PROOF_STATE_CACHE_MAX_ENTRIES = 400
+
+# Albums scanned concurrently. The client signs each request independently and holds no
+# shared session, so this is safe; the cap keeps a big folder from opening 100 sockets
+# at once.
+PROOF_STATE_SCAN_WORKERS = 8
+
+# Upper bound on albums scanned in one request, so a single call cannot pin the pool
+# indefinitely. Anything beyond this is reported back as unscanned rather than dropped.
+PROOF_STATE_MAX_ALBUMS = 200
 
 
 class PreviewServiceError(Exception):
@@ -183,6 +209,11 @@ class PreviewService:
         # {node_id or "": (monotonic timestamp, listing payload)}
         self._gallery_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._gallery_lock = threading.Lock()
+
+        # Per-album proof state for the picker badges:
+        # {album_key: (monotonic timestamp, state payload)}
+        self._proof_state_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._proof_state_lock = threading.Lock()
 
         # Instance-level job storage (not class-level to avoid memory leak)
         # Only keep the most recent jobs to limit memory usage
@@ -387,6 +418,175 @@ class PreviewService:
             self._gallery_cache.pop(key, None)
         logger.debug(f"Trimmed {len(oldest)} gallery cache entry(ies)")
 
+    def album_proof_states(
+        self, album_keys: List[str], refresh: bool = False
+    ) -> Dict[str, Any]:
+        """Report how much of each album smugVision has already tagged.
+
+        Answers the picker's question "have I worked on this one?" for a whole level at
+        once. Albums are scanned concurrently and the answers cached, because the scan
+        is one request per 100 images and cannot be made instant.
+
+        The marker rule is the processor's own
+        (:meth:`ImageProcessor.needs_processing`'s test, via ``keywords_contain``), so a
+        badge saying "proofed" means precisely that a default proof run would find
+        nothing left to do.
+
+        Args:
+            album_keys: Album keys to report on; duplicates and blanks are ignored
+            refresh: If True, ignore any cached answers and re-scan
+
+        Returns:
+            Dict with ``states`` ({album_key: {total, tagged, untagged, state}}),
+            ``unscanned`` (keys left out because the per-request cap was hit),
+            ``errors`` ({album_key: message}) and ``cache_ttl_seconds``.
+            ``state`` is one of ``all``, ``partial``, ``none`` or ``empty``.
+        """
+        wanted: List[str] = []
+        for key in album_keys:
+            key = (key or "").strip()
+            if key and key not in wanted:
+                wanted.append(key)
+
+        unscanned = wanted[PROOF_STATE_MAX_ALBUMS:]
+        wanted = wanted[:PROOF_STATE_MAX_ALBUMS]
+        if unscanned:
+            logger.warning(
+                f"Proof-state request covered {len(wanted)} albums; "
+                f"{len(unscanned)} left unscanned (cap {PROOF_STATE_MAX_ALBUMS})"
+            )
+
+        states: Dict[str, Any] = {}
+        to_scan: List[str] = []
+        now = time.monotonic()
+
+        if refresh:
+            to_scan = list(wanted)
+        else:
+            with self._proof_state_lock:
+                for key in wanted:
+                    entry = self._proof_state_cache.get(key)
+                    if entry is not None and (now - entry[0]) < PROOF_STATE_CACHE_TTL_SECONDS:
+                        states[key] = dict(entry[1], cached=True)
+                    else:
+                        to_scan.append(key)
+
+        errors: Dict[str, str] = {}
+        if to_scan:
+            marker_tag = self.config.get("processing.marker_tag", "smugvision")
+            logger.info(f"Scanning proof state for {len(to_scan)} album(s)")
+            started = time.monotonic()
+
+            workers = min(PROOF_STATE_SCAN_WORKERS, len(to_scan))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(self._scan_album_proof_state, key, marker_tag): key
+                    for key in to_scan
+                }
+                for future in as_completed(futures):
+                    key = futures[future]
+                    try:
+                        states[key] = future.result()
+                    except Exception as e:
+                        # One unreadable album must not blank out the whole level's
+                        # badges, so report it per album and keep the rest.
+                        logger.warning(f"Could not read proof state for album {key}: {e}")
+                        errors[key] = str(e)
+
+            logger.info(
+                f"Scanned {len(to_scan)} album(s) in {time.monotonic() - started:.2f}s"
+            )
+
+        return {
+            "states": states,
+            "unscanned": unscanned,
+            "errors": errors,
+            "cache_ttl_seconds": PROOF_STATE_CACHE_TTL_SECONDS,
+        }
+
+    def _scan_album_proof_state(self, album_key: str, marker_tag: str) -> Dict[str, Any]:
+        """Read one album's keywords and cache how much of it is tagged.
+
+        Args:
+            album_key: Album key to scan
+            marker_tag: Configured marker tag
+
+        Returns:
+            State payload for that album
+
+        Raises:
+            SmugMugError: If the album's images cannot be read
+        """
+        per_image = self.smugmug.get_album_image_keywords(album_key)
+        tagged = sum(1 for tags in per_image if keywords_contain(tags, marker_tag))
+        payload = self._store_proof_state(album_key, total=len(per_image), tagged=tagged)
+        return dict(payload, cached=False)
+
+    def _store_proof_state(self, album_key: str, total: int, tagged: int) -> Dict[str, Any]:
+        """Classify and cache one album's proof state.
+
+        Shared by the keyword scan and by :meth:`images_to_proof`, so an answer derived
+        from a full image read and an answer derived from the cheap scan are always
+        expressed the same way.
+
+        Args:
+            album_key: Album the counts belong to
+            total: Number of non-video images in the album
+            tagged: How many of them carry the marker tag
+
+        Returns:
+            The cached state payload
+        """
+        if total == 0:
+            state = "empty"
+        elif tagged == 0:
+            state = "none"
+        elif tagged >= total:
+            state = "all"
+        else:
+            state = "partial"
+
+        payload = {
+            "album_key": album_key,
+            "total": total,
+            "tagged": tagged,
+            "untagged": total - tagged,
+            "state": state,
+        }
+
+        with self._proof_state_lock:
+            self._proof_state_cache[album_key] = (time.monotonic(), payload)
+            self._trim_proof_state_cache()
+
+        return payload
+
+    def _trim_proof_state_cache(self) -> None:
+        """Drop the oldest proof-state entries once the cache exceeds its cap.
+
+        Must be called while holding ``self._proof_state_lock``.
+        """
+        excess = len(self._proof_state_cache) - PROOF_STATE_CACHE_MAX_ENTRIES
+        if excess <= 0:
+            return
+
+        oldest = sorted(self._proof_state_cache.items(), key=lambda item: item[1][0])[:excess]
+        for key, _ in oldest:
+            self._proof_state_cache.pop(key, None)
+
+    def invalidate_proof_state(self, album_key: str) -> None:
+        """Forget an album's cached proof state after writing to it.
+
+        Needed because SmugMug gives us no timestamp that moves when image metadata
+        changes, so a stale entry would otherwise keep claiming an album is unproofed
+        for the rest of the TTL after a commit.
+
+        Args:
+            album_key: Album that was just written to
+        """
+        with self._proof_state_lock:
+            if self._proof_state_cache.pop(album_key, None) is not None:
+                logger.debug(f"Invalidated cached proof state for album {album_key}")
+
     def resolve_album_from_url(self, url: str) -> tuple:
         """Resolve album key and name from SmugMug URL.
         
@@ -453,11 +653,17 @@ class PreviewService:
             SmugMugError: If the album's images cannot be read
         """
         images = [img for img in self.smugmug.get_album_images(album_key) if not img.is_video]
+        pending = [img for img in images if self.processor.needs_processing(img)]
+
+        # This call just read every image in the album, so it knows the album's proof
+        # state more accurately than any cached scan. Recording it here is free and
+        # keeps the picker's badge honest: starting a run on an album corrects its badge
+        # even when the previous answer came from another process's write.
+        self._store_proof_state(album_key, total=len(images), tagged=len(images) - len(pending))
 
         if force_reprocess:
             return images, 0
 
-        pending = [img for img in images if self.processor.needs_processing(img)]
         return pending, len(images) - len(pending)
 
     def create_preview_job(
@@ -921,6 +1127,12 @@ class PreviewService:
                 logger.error(f"Failed to commit changes for {result.filename}: {e}")
                 errors += 1
                 failed_keys.append(result.image_key)
+
+        if committed:
+            # The album's proof state just changed and SmugMug exposes no timestamp that
+            # reflects it, so drop the cached answer rather than let the picker keep
+            # showing a badge we know is now wrong.
+            self.invalidate_proof_state(job.album_key)
 
         return {
             "status": "success" if errors == 0 else "partial",

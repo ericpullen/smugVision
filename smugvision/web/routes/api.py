@@ -129,6 +129,43 @@ def list_galleries():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/albums/proof-state", methods=["GET"])
+def album_proof_state():
+    """Report how much of each album smugVision has already tagged.
+
+    Deliberately separate from ``/api/galleries``: reading keywords costs one request
+    per 100 images per album, so the picker draws the album list first and fills the
+    badges in from here. Answers are cached per album.
+
+    Query params:
+        keys: Comma-separated album keys (required)
+        refresh: Set to 1/true to bypass the cache and re-scan
+
+    Returns:
+        JSON with ``states`` keyed by album key, plus any ``errors`` and ``unscanned``
+        keys. A per-album failure is reported in ``errors`` rather than failing the
+        whole request, so one unreadable album cannot blank a whole level's badges.
+    """
+    raw_keys = request.args.get("keys", "")
+    keys = [part.strip() for part in raw_keys.split(",") if part.strip()]
+    refresh = _is_truthy(request.args.get("refresh", ""))
+
+    if not keys:
+        return jsonify({"error": "Missing 'keys' query parameter"}), 400
+
+    try:
+        service = get_preview_service()
+        return jsonify(service.album_proof_states(keys, refresh=refresh))
+
+    except SmugMugAuthError as e:
+        return jsonify({"error": f"SmugMug authentication failed: {e}"}), 401
+    except SmugMugRateLimitError as e:
+        return jsonify({"error": f"SmugMug rate limit reached: {e}"}), 429
+    except Exception as e:
+        logger.error(f"Failed to read proof state for {len(keys)} album(s): {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/preview", methods=["POST"])
 def start_preview():
     """Start a preview processing job for an album.

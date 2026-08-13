@@ -23,6 +23,17 @@
     let currentNode = null;   // node_id being listed (null = root)
     let running = false;
 
+    /* Proof state for the level on screen: {album_key: {state, tagged, total}}.
+       Filled in after the list is drawn, because the scan costs a request per 100
+       images per album. */
+    let proofStates = {};
+
+    /* Bumped on every loadLevel. A proof-state scan of a big folder takes seconds, so
+       by the time it answers the user may have navigated on; the token lets a late
+       reply recognise that its level is gone and drop itself instead of painting
+       badges onto somebody else's albums. */
+    let levelToken = 0;
+
     document.addEventListener('DOMContentLoaded', function () {
         dom.crumbs = document.getElementById('crumbs');
         dom.catalog = document.getElementById('catalog');
@@ -55,6 +66,9 @@
             loadLevel(currentNode, {refresh: true});
         });
         dom.clearSelectionBtn.addEventListener('click', clearSelection);
+        // Ticking re-proof changes how many frames a run covers, so the estimate and
+        // the notice have to follow it.
+        dom.forceReprocess.addEventListener('change', refreshSelectionMeta);
         dom.runBtn.addEventListener('click', function () {
             if (!selected) return;
             startRun({album_key: selected.album_key}, selected.name);
@@ -82,6 +96,8 @@
     async function loadLevel(nodeId, options) {
         const refresh = options && options.refresh;
         currentNode = nodeId || null;
+        const token = ++levelToken;
+        proofStates = {};
 
         showSkeleton();
         setNotice(dom.catalogError, '');
@@ -98,6 +114,7 @@
             const data = await S.apiGet(query);
             renderCrumbs(data);
             renderCatalog(data);
+            loadProofState(data.albums, refresh, token);
 
             const counts = [];
             if (data.folders.length) {
@@ -243,25 +260,153 @@
         const label = 'Album: ' + album.name +
             (known ? ', ' + S.plural(count, 'image') : ', image count unknown');
 
-        const button = el('button', {
-            type: 'button',
-            className: classes.join(' '),
-            'aria-pressed': 'false',
-            'aria-label': label,
-            dataset: {albumKey: album.album_key}
-        }, [
+        const children = [
             kindBadge('album', mixed),
             el('span', {className: 'row-name', text: album.name}),
             el('span', {
                 className: 'row-meta',
                 text: known ? S.plural(count, 'image') : 'image count unknown'
             })
-        ]);
+        ];
+
+        /* An empty album can never have been proofed, so it gets no badge and is left
+           out of the scan entirely. */
+        if (!known || count > 0) {
+            children.push(el('span', {
+                className: 'row-proof is-checking',
+                text: 'checking…'
+            }));
+        }
+
+        const button = el('button', {
+            type: 'button',
+            className: classes.join(' '),
+            'aria-pressed': 'false',
+            'aria-label': label,
+            dataset: {albumKey: album.album_key, baseLabel: label}
+        }, children);
 
         button.addEventListener('click', function () {
             selectAlbum(album, button);
         });
         return button;
+    }
+
+    /* -------------------------------------------------------------- *
+     * "Have I already proofed this one?" badges
+     * -------------------------------------------------------------- */
+
+    /**
+     * Fill in the proof badges for a level that has already been drawn.
+     *
+     * Kept out of the listing request on purpose: reading keywords costs one request
+     * per 100 images per album, so a folder of 19 albums takes seconds. The list stays
+     * usable throughout, and a failure here degrades to "unknown" rather than
+     * breaking album selection.
+     */
+    async function loadProofState(albums, refresh, token) {
+        const scannable = (albums || []).filter(function (album) {
+            return album.album_key && album.image_count !== 0;
+        });
+
+        if (!scannable.length) return;
+
+        let query = '/api/albums/proof-state?keys=' +
+            encodeURIComponent(scannable.map(function (a) { return a.album_key; }).join(','));
+        if (refresh) query += '&refresh=1';
+
+        let data;
+        try {
+            data = await S.apiGet(query);
+        } catch (error) {
+            if (token !== levelToken) return;
+            markProofUnknown('Could not read: ' + error.message);
+            return;
+        }
+
+        if (token !== levelToken) return;   // user has navigated on; this reply is stale
+
+        proofStates = data.states || {};
+        Object.keys(proofStates).forEach(function (key) {
+            paintProofBadge(key, proofStates[key], null);
+        });
+        Object.keys(data.errors || {}).forEach(function (key) {
+            paintProofBadge(key, null, data.errors[key]);
+        });
+        (data.unscanned || []).forEach(function (key) {
+            paintProofBadge(key, null, 'Not scanned: too many albums on this level.');
+        });
+
+        if (selected) refreshSelectionMeta();
+    }
+
+    function albumRowFor(albumKey) {
+        return dom.catalog.querySelector(
+            '.catalog-row.is-album[data-album-key="' + albumKey + '"]'
+        );
+    }
+
+    /** Describe a proof state as {text, className, spoken}. */
+    function proofLabel(state) {
+        if (!state) return null;
+        /* Albums listing zero items are never scanned, so "empty" coming back from the
+           scan means the opposite: the album holds things, but none of them are photos
+           (a folder of .MOV files does this). Saying so beats leaving a row that reads
+           "10 images" with no badge and no explanation. */
+        if (state.state === 'empty') {
+            return {
+                text: 'no photos',
+                className: 'is-unknown',
+                spoken: 'no photos to proof',
+                title: 'Nothing here to proof - videos are not processed.'
+            };
+        }
+        if (state.state === 'all') {
+            return {text: '✓ proofed', className: 'is-proofed', spoken: 'already proofed'};
+        }
+        if (state.state === 'partial') {
+            return {
+                text: state.tagged + ' of ' + state.total + ' proofed',
+                className: 'is-partial',
+                spoken: state.tagged + ' of ' + state.total + ' images already proofed'
+            };
+        }
+        return {text: 'not proofed', className: 'is-unproofed', spoken: 'not proofed yet'};
+    }
+
+    function paintProofBadge(albumKey, state, errorMessage) {
+        const row = albumRowFor(albumKey);
+        if (!row) return;
+
+        const badge = row.querySelector('.row-proof');
+        if (!badge) return;
+
+        if (errorMessage) {
+            badge.className = 'row-proof is-unknown';
+            badge.textContent = 'unknown';
+            badge.title = errorMessage;
+            return;
+        }
+
+        const label = proofLabel(state);
+        if (!label) {
+            badge.remove();
+            return;
+        }
+
+        badge.className = 'row-proof ' + label.className;
+        badge.textContent = label.text;
+        if (label.title) badge.title = label.title;
+        else badge.removeAttribute('title');
+        row.setAttribute('aria-label', (row.dataset.baseLabel || '') + ', ' + label.spoken);
+    }
+
+    function markProofUnknown(message) {
+        dom.catalog.querySelectorAll('.row-proof').forEach(function (badge) {
+            badge.className = 'row-proof is-unknown';
+            badge.textContent = 'unknown';
+            badge.title = message;
+        });
     }
 
     /* -------------------------------------------------------------- *
@@ -276,38 +421,88 @@
         });
 
         dom.selectionName.textContent = album.name;
+        refreshSelectionMeta();
+
+        dom.selection.classList.remove('hidden');
+        dom.runBtn.focus();
+    }
+
+    /**
+     * Rewrite the selection panel's meta line and notice.
+     *
+     * Re-run whenever anything it depends on moves: a new selection, the proof-state
+     * scan landing, or the re-proof checkbox being toggled. It reads the album's proof
+     * state so the estimate counts the frames a run would actually process, not the
+     * whole album - "about 2 minutes" is a lie when 45 of the 47 frames are already
+     * done and will be left out.
+     */
+    function refreshSelectionMeta() {
+        const album = selected;
+        if (!album) return;
+
+        const state = proofStates[album.album_key];
+        const force = dom.forceReprocess.checked;
+        const knownCount = typeof album.image_count === 'number';
+
+        // How many frames a run would actually work on.
+        let toProof = knownCount ? album.image_count : null;
+        if (state && !force) toProof = state.untagged;
+        else if (state) toProof = state.total;
 
         const bits = ['album ' + album.album_key];
-        if (typeof album.image_count === 'number') {
-            bits.push(S.plural(album.image_count, 'image'));
-            bits.push('about ' + estimate(album.image_count) + ' to proof');
+        if (knownCount) bits.push(S.plural(album.image_count, 'image'));
+        if (state && state.tagged) {
+            bits.push(state.tagged + ' already proofed');
+        }
+        if (typeof toProof === 'number' && toProof > 0) {
+            bits.push('about ' + estimate(toProof) + ' to proof ' +
+                S.plural(toProof, 'frame'));
         }
         if (album.privacy) bits.push(String(album.privacy).toLowerCase());
         dom.selectionMeta.textContent = bits.join('  ·  ');
 
         const empty = album.image_count === 0;
-        const big = typeof album.image_count === 'number' &&
-            album.image_count >= BIG_ALBUM;
+        const nothingLeft = Boolean(state && !force && state.untagged === 0 &&
+            state.total > 0);
+        const big = typeof toProof === 'number' && toProof >= BIG_ALBUM;
 
-        dom.selectionNotice.classList.add('hidden');
+        // Clear the text as well as hiding it: a stale sentence left in a hidden node
+        // reappears the moment anything unhides it.
         dom.selectionNotice.className = 'notice hidden';
+        dom.selectionNotice.textContent = '';
         if (empty) {
-            dom.selectionNotice.className = 'notice';
-            dom.selectionNotice.textContent =
-                'This album has no images, so there is nothing to proof.';
-            dom.selectionNotice.classList.remove('hidden');
+            setSelectionNotice(
+                '', 'This album has no images, so there is nothing to proof.'
+            );
+        } else if (nothingLeft) {
+            setSelectionNotice(
+                'caution',
+                'Every image here is already proofed. A run would find nothing to do ' +
+                'unless you tick "Re-proof images that smugVision already tagged".'
+            );
+        } else if (state && state.tagged && !force) {
+            setSelectionNotice(
+                '',
+                state.tagged + ' of ' + state.total + ' images are already proofed and ' +
+                'will be left out. This run covers the remaining ' +
+                S.plural(state.untagged, 'image') + '.'
+            );
         } else if (big) {
-            dom.selectionNotice.className = 'notice caution';
-            dom.selectionNotice.textContent =
-                'Large album: ' + S.plural(album.image_count, 'image') +
-                ' will take roughly ' + estimate(album.image_count) +
-                '. The run streams progress and you can leave this tab open.';
-            dom.selectionNotice.classList.remove('hidden');
+            setSelectionNotice(
+                'caution',
+                'Large run: ' + S.plural(toProof, 'image') + ' will take roughly ' +
+                estimate(toProof) +
+                '. The run streams progress and you can leave this tab open.'
+            );
         }
 
         dom.runBtn.disabled = Boolean(empty);
-        dom.selection.classList.remove('hidden');
-        dom.runBtn.focus();
+    }
+
+    function setSelectionNotice(kind, message) {
+        dom.selectionNotice.className = 'notice' + (kind ? ' ' + kind : '');
+        dom.selectionNotice.textContent = message;
+        dom.selectionNotice.classList.remove('hidden');
     }
 
     function clearSelection() {
