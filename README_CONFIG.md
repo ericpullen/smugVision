@@ -238,12 +238,39 @@ Settings for image processing behavior:
 ```yaml
 processing:
   marker_tag: "smugvision"           # Tag to mark processed images
-  generate_captions: true            # Generate image captions
-  generate_tags: true                # Generate keyword tags
+  generate_captions: true            # NOT WIRED - captions are always produced
+  generate_tags: true                # NOT WIRED - tags are always produced
+  generate_titles: false             # Also propose a short SmugMug Title (3-6 words)
   preserve_existing: true            # Keep existing metadata
   image_size: "Medium"               # Download size from SmugMug (case-insensitive)
   use_exif_location: true            # Extract GPS location from EXIF
 ```
+
+`marker_tag` is the idempotency mechanism: an image carrying it is left out of a run
+entirely unless `--force-reprocess` is passed (or the matching box ticked in the web UI).
+
+`generate_titles` is off by default. The title comes back from the same single request, so it
+costs nothing extra, but it writes a SmugMug field nothing else touches. Both the CLI and the
+web UI can override `preserve_existing` and `generate_titles` per run.
+
+### Hint Configuration
+
+Hints are facts you assert about a photo, injected into the prompt as ground truth and
+outranking whatever the model thinks it sees.
+
+```yaml
+hints:
+  enabled: true                      # false ignores hints.yaml entirely
+  file: "~/.smugvision/hints.yaml"   # created on first write; safe to hand-edit
+```
+
+The file itself holds notes at three scopes (`global`, `albums`, `images`, which
+accumulate) plus `locations:`, `people:` and `pets:` sections, where the most specific
+scope wins outright. Pet *definitions* live separately in `~/.smugvision/pets.yaml`; see
+the main [README](README.md#telling-smugvision-what-it-cannot-see) for the whole picture.
+
+Both front ends read the same file, so a hint added in the web UI takes effect on the next
+CLI run and vice versa.
 
 ### Prompt Configuration
 
@@ -259,6 +286,11 @@ prompts:
     for this image. Describe the main subject, setting, and activity.
     IMPORTANT: Output ONLY the caption text. No options, no explanations, no
     introductions like 'Here is...' - just the caption itself.
+
+  # Only used when processing.generate_titles is on.
+  title: |
+    Also give a very short title for this image: 3-6 words, like a label in a photo
+    album. Not a sentence. No trailing punctuation.
 
   tags: |
     Output a comma-separated list of 5-10 keyword tags for this image.

@@ -642,6 +642,30 @@ logger.error(f"Failed to update image {image_id}: {error}", exc_info=True)
 - [ ] Cache cleanup functionality (planned for 1.0)
 - [ ] Integration tests
 
+### Version 0.4.0 - Complete ✓
+
+The proof-sheet workflow: the web UI stopped being a monitor and became the primary way to
+run smugVision, on the principle that the model's output is a *proposal* and the person who
+took the photo is the authority.
+
+- [x] Gallery browser: one level of the node tree per request, so cost is independent of
+      account size
+- [x] Proof sheet with a per-frame diff, always dry-run, write behind a latch and a dialog
+- [x] Hints — user-asserted facts at global / album / image scope, injected as ground truth
+- [x] Location overrides that *replace* the geocoded place name rather than argue with it
+- [x] People overrides that replace the recognised-name list, with a picker over the
+      reference faces; pinned people as large tiles, the rest behind a drawer
+- [x] Pets — named subjects with no reference face, ticked per photo (`pets.yaml`)
+- [x] Title generation (`processing.generate_titles`, `prompts.title`), off by default
+- [x] Per-run overrides for replace-vs-merge and titles, in both front ends
+- [x] Already-tagged frames left out of a run entirely, not processed and discarded
+- [x] Proof-state badges per album, so you can see what you have already done
+- [x] Re-read one frame, or every frame in an album, after changing a note
+- [x] Return to the folder you started from after a write
+- [x] One structured Ollama call per image; no model allow-list
+- [x] Pluggable face backends (dlib default, optional InsightFace/ArcFace)
+- [x] Reverse-geocoding cache (failures cached too, deliberately)
+
 ### Version 1.0.0
 - [ ] Complete documentation
 - [x] Installation via pip
@@ -985,6 +1009,13 @@ For each image in album:
 ---
 
 ## Web UI Design (Phase 3 Feature)
+
+> **Status: built, and it has moved on from this design.** The shipped UI is a two-step
+> proof sheet — pick an album, review and correct every proposal, then write — and it grew
+> hints, location/people/pet overrides, proof-state badges and album-wide re-reads that this
+> section never anticipated. Read [README.md](README.md#the-web-proof-sheet) for what it
+> actually does and [CLAUDE.md](CLAUDE.md) for how it is wired. **The design below is kept
+> as the original intent, not as a description of the current code.**
 
 ### Overview
 

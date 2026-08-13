@@ -33,6 +33,18 @@ Automatically generate descriptive captions and relevant tags for your SmugMug p
 - Skip already-processed images
 - Video file detection and exclusion (optional)
 
+🖥️ **Web proof sheet** (`smugvision-web`)
+- Browse your galleries and see at a glance which albums you have already done
+- Every run is a dry run: review each proposed caption, title and keyword list first
+- Correct the model where it is wrong, re-read one frame or the whole album, then write
+- Nothing reaches SmugMug until you arm a latch and confirm a dialog
+
+✍️ **Tell it what it cannot see**
+- Notes at global, album or image scope, treated as ground truth over the model's guess
+- Override the location when GPS resolves to the wrong place
+- Say who is in a photo when face recognition misses them, picked from your reference faces
+- Name your pets once and tick them per photo - animals have no reference faces
+
 🔄 **SmugMug Integration**
 - OAuth 1.0a authentication
 - Batch album processing
@@ -170,6 +182,16 @@ Reprocess images even if they already have the `smugvision` marker tag:
 smugvision --gallery abc123 --force-reprocess
 ```
 
+### Replace Instead of Merge
+
+By default a new caption and keywords are merged with whatever is already on the image
+(`processing.preserve_existing`). To replace them outright for one run:
+```bash
+smugvision --gallery abc123 --no-preserve-existing
+```
+Useful for cleaning up captions written by an older version. There is a matching
+`--preserve-existing` if your config has it turned off.
+
 ### Include Videos
 
 By default, video files are skipped. To include them:
@@ -259,11 +281,19 @@ opposite directions and are not interchangeable.
 processing:
   generate_captions: true
   generate_tags: true
+  generate_titles: false     # also propose a short SmugMug Title (3-6 words)
   preserve_existing: true
   marker_tag: "smugvision"
   image_size: "Medium"
   use_exif_location: true
 ```
+
+`generate_titles` is off by default. It costs nothing extra — the same single request already
+returns a title — but it writes a field nothing else touches, so you opt in. The instruction is
+`prompts.title`, and a model that ignores it simply leaves the existing Title alone.
+
+`marker_tag` is how a re-run knows what it has already done. An image carrying it is left out
+entirely unless you pass `--force-reprocess`, or tick the matching box in the web UI.
 
 > `generate_captions` and `generate_tags` are present in the default config but are
 > not currently read by `ImageProcessor` — it always produces both. Setting them to
@@ -325,13 +355,137 @@ For a complete configuration example, see [`config.yaml.example`](config.yaml.ex
 2. **Image Download**: Downloads images to local cache (configurable size: Thumb, Small, Medium, Large, XLarge)
 3. **EXIF Extraction**: Reads EXIF data for GPS coordinates, date/time, orientation
 4. **Location Lookup**: Reverse geocodes coordinates to human-readable location names
-5. **Face Recognition**: Detects and identifies known people in photos
-6. **Context Building**: Combines location, people, and EXIF data into context
+5. **Face Recognition**: Detects and identifies known people in photos. Anyone you have named
+   yourself replaces that list outright
+6. **Context Building**: Combines location, people, pets and EXIF data into context, then adds
+   your notes last, as facts that outrank the model's own reading
 7. **AI Generation**: Sends the image once, with all of that context, in a single
    structured request that returns the caption and the tags together
 8. **Metadata Formatting**: Combines AI-generated metadata with extracted context
 9. **SmugMug Update**: Patches image metadata via SmugMug API
 10. **Progress Tracking**: Reports statistics and any errors
+
+---
+
+## The Web Proof Sheet
+
+```bash
+smugvision-web                 # http://127.0.0.1:5050
+smugvision-web --port 5085     # somewhere else
+```
+
+Binds to `127.0.0.1` only. It reads the same config and runs the same `ImageProcessor` as the
+CLI, so anything true of one is true of the other.
+
+### Step 1 — choose an album
+
+Browse the folder tree one level at a time. Each album carries a badge saying whether
+smugVision has been here before:
+
+| Badge | Meaning |
+|-------|---------|
+| `✓ proofed` | Every photo already carries the marker tag |
+| `7 of 11 proofed` | A partial pass; a run covers the remaining 4 |
+| `not proofed` | Nothing done yet |
+| `no photos` | The album holds only videos, which are never proofed |
+
+Badges appear a moment after the list, because reading keywords costs one request per 100
+images per album. **Refresh** forces a re-scan.
+
+Three toggles before you start:
+
+- **Re-proof images that smugVision already tagged** — off by default, so a second pass over an
+  album only loads the frames that still need attention.
+- **Replace the existing caption and keywords** — off merges, on replaces.
+- **Propose a Title as well** — follows `processing.generate_titles` from your config.
+
+### Step 2 — proof it
+
+One card per frame: the photograph, what is on SmugMug now, and what smugVision proposes.
+Under each card you can correct what the model got wrong:
+
+- **Note for this frame** — a fact it must accept over its own reading of the image
+- **Correct location** — *replaces* the place resolved from GPS, for the caption and keywords
+- **Who is in this frame** — your most-used people as large tiles, everyone else in a drawer.
+  Ticking replaces the recogniser's list, so name everyone, including anyone it got right.
+  The ☆ pins somebody to the top row for good.
+- **Any pets in this frame** — see below
+
+**Save note & re-read** re-runs that one frame. At the album level, **Save & re-read all N
+frames** applies a new album note to every frame in the run, one at a time, with a stop button.
+
+### Writing
+
+The write panel is the only thing here that touches SmugMug. Expand it, arm the latch, press the
+button, and confirm the dialog, which names exactly how many images are about to change. After a
+clean write you land back on the album list at the folder you started from, with the album's
+badge brought up to date. A partial write keeps you on the proof sheet so you can see what
+failed.
+
+---
+
+## Telling smugVision What It Cannot See
+
+A vision model describes what a photo *looks like*, not what it *is*. A ribbed white Nylabone is
+a perfectly reasonable "long cracker" if you have never seen one. Everything in this section is
+you asserting a fact, and every one of them outranks the model's own reading.
+
+All of it lives in `~/.smugvision/hints.yaml`, is safe to edit by hand, and is read by both the
+CLI and the web UI.
+
+### Notes
+
+Three scopes, which **accumulate** — global, then album, then image:
+
+```yaml
+global: "Biscuit is a Charcoal Labrador. Ada and Sam are our children."
+albums:
+  Ab3kZq: "Biscuit's 7th birthday party."
+images:
+  Xy7NpQr: "The white ribbed object is a Nylabone dog chew, not food."
+```
+
+A wrong note produces a confidently wrong caption, so keep them factual.
+
+### Location, people and pets
+
+Unlike notes, these **replace** rather than accumulate, and the most specific scope wins - an
+image entry beats an album one:
+
+```yaml
+locations:
+  images:
+    Xy7NpQr: "Gorilla Enclosure, Louisville Zoo"
+people:
+  images:
+    Xy7NpQr: [Ada_Rivera, Nina_Rivera]
+pets:
+  images:
+    Xy7NpQr: [Biscuit]
+```
+
+A **location** override replaces the geocoded place name outright. A note arguing with GPS
+usually loses, because the geocoded name is in the prompt too.
+
+A **people** override replaces the recognised-name list, which is what a note cannot do: those
+names also feed the keywords and the relationships lookup. It works even with face recognition
+switched off entirely.
+
+### Pets
+
+Face recognition learns human faces from your reference photos, so an animal is invisible to it
+however often it appears. Name your pets once, in `~/.smugvision/pets.yaml` or on the Hints page
+of the web UI:
+
+```yaml
+pets:
+  Biscuit: This is Biscuit, a Charcoal Labrador, and the family pet.
+  Pepper: This is Pepper, the family Lionhead Black bunny.
+```
+
+The value is the whole sentence, because that is what the model is told - write it the way you
+want it said. Tick a pet on a frame and its sentence joins the prompt as ground truth while its
+name is added to the keywords. See `pets.yaml.example`.
 
 ---
 
@@ -496,6 +650,8 @@ See [`DESIGN.md`](DESIGN.md) for detailed roadmap. Planned features include:
 
 - [ ] Batch folder processing
 - [x] Web UI for monitoring and control (`smugvision-web`)
+- [x] Proof sheet: review and correct every proposal before anything is written
+- [x] Hints — notes, location, people and pet overrides that outrank the model
 - [x] Any Ollama vision model (no code change needed to switch models)
 - [ ] Non-Ollama vision backends (GPT-4V, Claude Vision)
 - [ ] Smart duplicate detection

@@ -12,6 +12,11 @@ generated captions contain real people's names and place names.
 Two front ends sit on the same core: a CLI (`smugvision`) and a Flask web UI (`smugvision-web`)
 that previews changes before committing them.
 
+Anything the model cannot see for itself is asserted by the user rather than guessed: notes,
+location overrides, who is in a photo, and which pets are in it. All of that lives in
+`~/.smugvision/hints.yaml` and `pets.yaml`, is injected into the prompt as ground truth, and
+outranks the model's own reading of the image.
+
 ## Commands
 
 ```bash
@@ -27,6 +32,7 @@ smugvision-optimize-faces        # downscale reference faces (big speedup on enc
 smugvision --gallery <album_key> --dry-run    # safest way to exercise the whole pipeline
 smugvision --url "https://site.smugmug.com/.../n-XXXXX/album-name" --verbose
 smugvision --gallery <key> --force-reprocess  # ignore the marker tag
+smugvision --gallery <key> --no-preserve-existing   # replace caption/keywords, do not merge
 smugvision-web --port 5050                    # web UI (127.0.0.1 only by default)
 
 black .                          # line-length 100 (configured in pyproject.toml)
@@ -63,7 +69,12 @@ Per-image pipeline in `process_image()`:
 
 1. **Marker-tag skip** — images already carrying `processing.marker_tag` (default `smugvision`) are
    skipped unless `force_reprocess`. This is the idempotency mechanism; the marker is appended to
-   the keyword list by `MetadataFormatter.format_tags()`.
+   the keyword list by `MetadataFormatter.format_tags()`. The test lives in
+   `AlbumImage.has_marker_tag()` → `smugmug.models.keywords_contain()`, which is **separator
+   aware**: SmugMug returns the whole keyword list as one semicolon-joined blob, so a plain
+   `"smugvision" in image.keywords` matches nothing on every image already processed. One rule,
+   one place — `ImageProcessor.needs_processing()` exposes it so a caller can filter an album
+   *before* processing instead of processing everything and discarding the skips.
 2. **Download to cache** — `CacheManager` lays images out as `<cache_dir>/<album_name>/<filename>`.
    `SmugMugClient.download_image(skip_if_exists=True)` returns `None` when the file is already
    cached, so the processor reconstructs the path itself — don't "fix" that None into an error.
@@ -79,9 +90,20 @@ Per-image pipeline in `process_image()`:
    (`John_Doe`). Conversion to "John Doe" happens downstream, for display/tags/captions.
    `~/.smugvision/relationships.yaml` is matched on the *underscore* form, so raw names must
    survive into the vision layer or relationships silently match nothing.
+   A **people override** (`HintManager.resolve_people()`) replaces the recognised list outright
+   when the user has said who is in the photo — applied here, not as a note, because the
+   recognised names also feed the keywords, the relationships lookup and `result.detected_faces`,
+   none of which a note can reach. It applies even with face recognition disabled entirely.
+5b. **Pets** — `HintManager.resolve_pets()` names animals, which have no reference faces.
+   `ImageProcessor._resolve_pets()` turns them into the description sentences from
+   `~/.smugvision/pets.yaml` (`processing/pets.py`) and appends them to the hint text; the names
+   go to `format_tags(pet_names=...)`. A pet deliberately never joins `person_names`: it must not
+   be counted as a detected face or reach the "N people visible" arithmetic in the prompt. A pet
+   ticked but since deleted from pets.yaml contributes nothing rather than a bare name.
 6. **Prompt building + generation — ONE structured call.**
    `LlamaVisionModel.generate_metadata(image_path, caption_instruction, tags_instruction, *,
-   temperature, max_tokens, location_context, person_names, total_faces, album_name)` builds one
+   temperature, max_tokens, location_context, person_names, total_faces, album_name, hints,
+   title_instruction)` builds one
    prompt from both instructions plus all context, encodes the image **once**, and makes **one**
    `ollama.Client.chat()` request constrained by a JSON schema, returning a `MetadataResult`.
    Context injection (album, location, people, and `relationships.yaml` via
@@ -91,8 +113,15 @@ Per-image pipeline in `process_image()`:
    Escape hatches: `vision.single_call: false` restores the two-request path and
    `vision.structured_output: false` restores free-text output with heuristic parsing
    (`_parse_tags`, `_strip_thinking_tags`). Both legacy paths are live, not stubs.
+   `hints` is the resolved user-asserted text (global + album + image, plus any pet sentences) and
+   is injected **last** so nothing later dilutes it. `title_instruction` is passed only when
+   `processing.generate_titles` is on; the title is offered in the JSON schema but deliberately
+   NOT required, so a model that ignores it costs nothing.
 7. **Formatting** → `MetadataFormatter` merges AI output with existing caption/keywords
    (`preserve_existing` joins old and new with ` | `), dedupes case-insensitively, appends marker.
+   `format_caption()` only appends its "Featuring X at Y" suffix when the caption does not already
+   name those people/places. `format_tags()` takes `person_names`, `pet_names` and `location_tags`
+   as separate arguments — keep them separate, that is what stops a pet being treated as a face.
 8. **Write or dry-run**, then an explicit `gc.collect()` — image + dlib buffers are large and this
    is deliberate.
 
@@ -100,6 +129,14 @@ Per-image pipeline in `process_image()`:
 
 - `smugmug/` — OAuth 1.0a client (`requests-oauthlib`), node-tree walking to turn a URL's
   `n-XXXXX` node ID + slug into an album key (`resolve_album_key`), `AlbumImage`/`Album` models.
+  `models.split_keywords()` / `keywords_contain()` are the single source of truth for reading
+  SmugMug's semicolon-joined keyword blob; `AlbumImage.has_marker_tag()` and
+  `ImageProcessor._split_keywords()` both delegate to them, so the marker rule cannot drift.
+  `get_album_image_keywords()` is a deliberately cheap read (`_filter=KeywordArray,Keywords,
+  IsVideo`, ~0.24s for 13 images against ~1s for the full expansion) used only to answer "has
+  this album been processed?" — it does not build `AlbumImage` objects.
+  `_request()` uses `requests.request()` directly with a per-call OAuth1 signature and holds no
+  shared session, which is why the proof-state scanner can run 8 albums concurrently.
 - `vision/` — `VisionModel` ABC + `VisionModelFactory`. All Ollama vision models share one
   implementation, `LlamaVisionModel` (a misnomer — it is the generic Ollama adapter).
   **There is no allow-list**: `VisionModelFactory.create()` maps any model name to
@@ -148,6 +185,34 @@ Per-image pipeline in `process_image()`:
   wraps the *same* `ImageProcessor` with `dry_run=True` and streams SSE progress; results are held
   in an in-memory job dict (max 5 jobs) and written only when `POST /api/commit` runs. Keep new
   processing logic in `processing/`, not in the service — the point of that design is CLI/UI parity.
+  Jobs are in memory only: **restarting the server invalidates every open proof sheet.**
+
+  - **Which images a run covers is settled when the job is created.** `images_to_proof()` drops
+    videos and, unless `force_reprocess`, images already carrying the marker tag; both the count
+    and the processing loop go through it, so they cannot disagree. `force_reprocess` therefore
+    lives on the `PreviewJob`, and `process_preview()` takes no such argument — the SSE route
+    still accepts the old query param and ignores it.
+  - **Proof-state badges** — `GET /api/albums/proof-state?keys=a,b,c` reports `all` / `partial` /
+    `none` / `empty` per album so the picker can show what has been done. Separate from
+    `/api/galleries` because it costs one request per 100 images per album (~4s for 19 albums);
+    the list draws first and badges fill in. Cached for `PROOF_STATE_CACHE_TTL_SECONDS` (300).
+    **SmugMug's `ImagesLastUpdated` does NOT move when image metadata is PATCHed**, so there is no
+    timestamp to validate against: a commit invalidates its own album, `images_to_proof()`
+    re-derives state for free when a run starts, and the TTL is the only thing that heals a write
+    made by another process.
+  - **Pets** — `GET/PUT /api/pets`, `DELETE /api/pets/<name>` over `processing/pets.py`.
+  - **Hints** — `PUT /api/hints` takes `text`, `location`, `people` and `pets` together; the
+    proof sheet saves all four in one call before re-reading a frame.
+  - `PreviewJob.origin_node` remembers the folder the picker was showing, so the proof sheet can
+    return there after a write (`/?node=<id>`). A run started from a pasted URL has none.
+- `processing/` — `hints.py` (`HintManager`) owns `~/.smugvision/hints.yaml`: notes in three
+  scopes (global/album/image, which **accumulate**), plus `locations:`, `people:` and `pets:`
+  sections where the **most specific scope wins outright**. `pets.py` (`PetManager`) owns
+  `~/.smugvision/pets.yaml`, a name → sentence map for animals. Both reload on mtime change, so a
+  hand edit or another process's write is picked up without a restart, and both write atomically
+  (`tempfile.mkstemp` + `os.replace`) preserving the existing file mode.
+  `HintManager.people_usage()` tallies how often each person has been picked, which is how the
+  web UI seeds its pinned-people list — a better signal than reference-photo count.
 - `config/` — `ConfigManager.load()` deep-merges the YAML over `config/defaults.py`, so adding a
   key to `DEFAULT_CONFIG` reaches existing users' configs automatically. Access is dot-notation
   (`config.get("vision.model")`). Search order: `~/.smugvision/config.yaml`, then `./config.yaml`.
@@ -162,9 +227,42 @@ Per-image pipeline in `process_image()`:
 
 ### State lives outside the repo
 
-`~/.smugvision/` holds `config.yaml`, `locations.yaml`, `relationships.yaml`,
-`geocoding_config.yaml`, `reference_faces/`, `cache/`, and `smugvision.log`. Nothing under the repo
-is authoritative at runtime; `config.yaml.example` and `locations.yaml.example` are templates only.
+`~/.smugvision/` holds `config.yaml`, `hints.yaml`, `pets.yaml`, `locations.yaml`,
+`relationships.yaml`, `geocoding_config.yaml`, `reference_faces/`, `cache/`, and `smugvision.log`.
+Nothing under the repo is authoritative at runtime; `config.yaml.example`, `locations.yaml.example`
+and `pets.yaml.example` are templates only.
+
+**Treat `hints.yaml` as user data.** It accumulates hundreds of hand-written per-photo assertions
+that exist nowhere else and cannot be regenerated. Back it up before any test that writes to it,
+and remember that `PUT /api/hints` with `text: ""` **clears** the note for that key — the
+"Cleared image hint" log line is emitted unconditionally, so it is not evidence that something was
+actually removed.
+
+### The web UI, as a workflow
+
+Step 1 picks an album, step 2 proofs it, and the only write is behind a latch and a dialog.
+
+- The picker shows a **proof badge** per album (`✓ proofed`, `7 of 11 proofed`, `not proofed`,
+  `no photos` for an album that holds only videos), and the selection panel counts the frames a
+  run would actually cover — not the whole album, since already-tagged frames are left out.
+- The proof sheet carries the album note, a location override, an album-scope people picker
+  (collapsed, because naming a whole album is the rare case; it opens itself and says so when an
+  override IS set) and pet chips. Each frame card repeats all four at image scope.
+- The **people picker pins a few people as large tiles** and files the rest behind a drawer.
+  Pinned names live in `localStorage` (`smugvision.favouritePeople`), seeded from
+  `picker_count` on `/api/faces`. Selection state lives in a closure, not the DOM, so
+  re-rendering after a pin change cannot drop a tick; anyone already ticked is hoisted out of the
+  drawer when a picker is built.
+- **"Save & re-read all N frames"** saves the album note and re-reads every frame sequentially
+  (one local Ollama process; parallel would not be faster), holding the write path shut for the
+  whole sweep and offering a stop that finishes the frame in flight.
+- After a **clean** write the sheet returns to `/?node=<origin>` with the confirmation carried in
+  the query string and then stripped. A partial write stays put — that is when you need to see
+  what failed.
+
+If you touch this UI: a hidden `<input type="checkbox">` needs its checked state drawn somewhere,
+or ticking looks like nothing happened. That shipped as a bug once because the tests clicked the
+input directly (`box.click()`) — the one path a user never takes. Click the label.
 
 ### The write path
 
@@ -184,16 +282,22 @@ been deleted rather than left as a trap.) Do not "simplify" either call site to
 
 Verify before documenting or "fixing" — these were true at the time of writing:
 
-- `face_recognition.tolerance` / `.model` / `.detection_scale` — `FaceRecognizer` accepts all
-  three, but `ImageProcessor` does not pass them, so the constructor defaults (0.6 / `cnn` /
-  0.5) win. A `face_recognition.dlib:` sub-block *does* reach the backend, because the
-  processor reads `face_recognition.<backend>` into `backend_options`.
 - `processing.generate_captions` / `.generate_tags` — read by nothing; both are always
   produced. Honouring them is now cheap: `generate_metadata` treats an empty
   `caption_instruction` or `tags_instruction` as "skip that half".
-- `tests/test_vision.py` hardcodes a model name rather than reading `vision.model`, so the
+- `tests/test_vision.py` hardcodes `llama3.2-vision` rather than reading `vision.model`, so the
   repo's main hand-run smoke test fails with a model-not-found 404 on a machine that does not
   have that exact model. That failure is not evidence of a broken vision layer.
+
+`face_recognition.tolerance` / `.model` / `.detection_scale` **are** now wired: the processor
+reads the `face_recognition.<backend>` sub-block into `backend_options` and folds those three
+legacy top-level keys in, with the sub-block winning on conflict. (Earlier revisions of this file
+said otherwise.)
+
+### Known-unfixed
+
+- `vision.single_call: false` **and** `structured_output: false` together raise on any tags-only
+  free-text response. Pre-existing; both legacy paths are otherwise live.
 
 ## Conventions
 

@@ -6,13 +6,19 @@ The `ImageProcessor` is the core orchestration module that ties together all smu
 
 The processor handles the complete pipeline:
 
-1. **Download** - Fetches images from SmugMug to local cache
-2. **Extract** - Pulls EXIF data (GPS, date, camera info)
-3. **Detect** - Identifies faces using face recognition
-4. **Analyze** - Generates captions and tags using AI vision model
-5. **Format** - Combines AI output with EXIF data and person names
-6. **Update** - Pushes metadata back to SmugMug
-7. **Mark** - Adds marker tag to track processed images
+1. **Skip** - Images already carrying the marker tag are left out of the run entirely
+   (unless `force_reprocess`), so a second pass only covers what still needs doing
+2. **Download** - Fetches images from SmugMug to local cache
+3. **Extract** - Pulls EXIF data (GPS, date, camera info). GPS comes from the SmugMug API
+   first and EXIF only as a fallback, because SmugMug strips GPS from the image bytes
+4. **Detect** - Identifies faces using face recognition. A people override you have saved
+   replaces that list outright
+5. **Analyze** - Generates the caption, tags and (optionally) a Title using the AI vision
+   model, in ONE structured request per image. Your notes and pet descriptions go in last,
+   as facts that outrank the model's own reading
+6. **Format** - Combines AI output with EXIF data, person names, pet names and location tags
+7. **Update** - Pushes metadata back to SmugMug (skipped entirely in dry-run)
+8. **Mark** - Adds marker tag to track processed images
 
 ## Quick Start
 
@@ -68,19 +74,29 @@ The main orchestrator that coordinates all components:
 
 ```python
 ImageProcessor(
-    config: ConfigManager,           # Configuration
-    smugmug_client: SmugMugClient,  # Optional: SmugMug API
-    vision_model: VisionModel,       # Optional: AI vision model
-    cache_manager: CacheManager,     # Optional: Image cache
-    face_recognizer: FaceRecognizer, # Optional: Face detection
-    dry_run: bool = False           # Preview mode
+    config: ConfigManager,             # Configuration
+    smugmug_client: SmugMugClient,     # Optional: SmugMug API
+    vision_model: VisionModel,         # Optional: AI vision model
+    cache_manager: CacheManager,       # Optional: Image cache
+    face_recognizer: FaceRecognizer,   # Optional: Face detection
+    hint_manager: HintManager,         # Optional: user-asserted facts
+    dry_run: bool = False,             # Preview mode
+    preserve_existing: bool = None,    # None = use config; False = replace, do not merge
+    generate_titles: bool = None,      # None = use config
 )
 ```
+
+Every collaborator is injectable, which is the seam both the tests and the web UI use: pass
+mocks rather than reaching the network or a live Ollama. `preserve_existing` and
+`generate_titles` are per-run overrides — `None` means "use the configured value", so a
+caller that does not care never has to know what the config says.
 
 **Key Methods:**
 
 - `process_album(album_key, force_reprocess, skip_videos)` - Process all images in album
 - `process_image(image, album, force_reprocess)` - Process single image
+- `needs_processing(image)` - True if the image does not yet carry the marker tag. Lets a
+  caller filter an album *before* processing rather than processing and discarding skips
 
 ### MetadataFormatter Class
 
