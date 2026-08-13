@@ -14,8 +14,12 @@
     const S = window.smugvision;
     const el = S.el;
 
-    /* Measured on this account: roughly 2-3s per image for a dry run. */
-    const SECONDS_PER_IMAGE = 2.5;
+    /* Seconds per frame for a dry run, used only for the "about N minutes" estimate.
+       Measured at ~13s with gemma4:26b on an M-series Mac (a 43-frame album took just
+       over nine minutes). It scales with model size and hardware, so treat it as an
+       order of magnitude: the previous 2.5 was off by 5x and made a nine-minute run
+       look like a two-minute one. */
+    const SECONDS_PER_IMAGE = 13;
     const BIG_ALBUM = 200;
 
     const dom = {};
