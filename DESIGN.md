@@ -281,14 +281,15 @@ Custom locations allow users to define friendly names for places like their home
 
 ```yaml
 locations:
+  # Coordinates and addresses in this file are deliberately synthetic. A real one
+  # belongs in ~/.smugvision/locations.yaml, which is outside the repository.
   - name: "My House"
-    latitude: 38.123456
-    longitude: -85.654321
+    latitude: 00.000000
+    longitude: -00.000000
     radius: 50                    # Match radius in meters
     address: "123 Example Street, Yourtown, ST"
     aliases:
       - "Home"
-      - "Example Residence"
   
   - name: "Louisville Slugger Field"
     latitude: 38.256510

@@ -29,21 +29,22 @@
 #   aliases (optional): Additional names to add as keyword tags
 
 locations:
-  # Example: Your home
+  # Example: your home. The numbers below are placeholders on purpose - your real
+  # coordinates belong in ~/.smugvision/locations.yaml, which is never committed.
   - name: "My House"
-    latitude: 38.255582
-    longitude: -85.770201
+    latitude: 00.000000
+    longitude: -00.000000
     radius: 50
-    address: "1135 W Jefferson St, Louisville, KY 40203"
+    address: "123 Example Street, Yourtown, ST 00000"
     aliases:
       - "Home"
   
   # Example: A relative's house
   - name: "Mom's House"
-    latitude: 38.234567
-    longitude: -85.765432
+    latitude: 00.000000
+    longitude: -00.000000
     radius: 75
-    address: "123 Main Street, Louisville, KY 40205"
+    address: "456 Example Avenue, Yourtown, ST 00000"
     aliases:
       - "Grandma's House"
       - "Smith Residence"

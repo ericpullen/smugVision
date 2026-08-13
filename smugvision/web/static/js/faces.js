@@ -105,7 +105,7 @@
         ]);
     }
 
-    /** "Eric Pullen" -> "EP". Falls back to the first character. */
+    /** "Ada Rivera" -> "AR". Falls back to the first character. */
     function initials(name) {
         const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
         if (!parts.length) return '?';

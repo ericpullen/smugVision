@@ -61,7 +61,7 @@ class MetadataFormatter:
             # Add person names, but only those the model did not already name itself.
             # Vision models are given the recognized names as prompt context and now
             # usually work them into the sentence, so appending them unconditionally
-            # produced "Eric Pullen smiles ... Featuring Eric Pullen."
+            # produced "Nina Rivera smiles ... Featuring Nina Rivera."
             if person_names:
                 unmentioned = [
                     name for name in person_names if not self._mentions(caption_text, name)

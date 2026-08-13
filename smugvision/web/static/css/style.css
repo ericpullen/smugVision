@@ -2108,7 +2108,7 @@ dialog#confirm-write-modal {
 .picker-item.is-tile .picker-name {
     font-size: 0.78rem;
     max-width: 100%;
-    /* Wrap rather than ellipsise: "Sam Rive..." is worse than two short lines,
+    /* Wrap rather than ellipsise: "Alexandra Riv..." is worse than two short lines,
        and the equal-height labels below keep the row tidy when one name wraps. */
     white-space: normal;
     line-height: 1.25;

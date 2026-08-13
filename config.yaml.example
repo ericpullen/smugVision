@@ -151,9 +151,9 @@ location:
 #
 # ~/.smugvision/hints.yaml holds three scopes, applied most-general-first:
 #
-#   global: "Biscuit is a black Labrador."      # every photo
+#   global: "Biscuit is a Golden Retriever."  # every photo
 #   albums:
-#     Ab3kZq: "Biscuit's 7th birthday party."   # one album, by album key
+#     Ab3kZq: "Biscuit's 7th birthday party." # one album, by album key
 #   images:
 #     Xy7NpQr: "The white ribbed object is a Nylabone dog chew."   # one image
 #

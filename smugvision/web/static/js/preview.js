@@ -840,7 +840,7 @@
      * Build a pet picker: one chip per configured pet.
      *
      * Separate from the people picker on purpose. A pet has no reference face and must
-     * never be counted as one, so ticking Biscuit adds his description to the prompt as
+     * never be counted as one, so ticking a pet adds its description to the prompt as
      * ground truth and his name to the keywords - it does not claim a face was found.
      *
      * @param {string} idPrefix unique per picker instance

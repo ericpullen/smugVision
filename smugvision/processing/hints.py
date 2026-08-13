@@ -9,13 +9,13 @@ subsequent caption of that photo (or album, or the whole library) respect it.
 Three scopes, applied most-general-first so a narrower hint reads as a refinement of a
 broader one rather than a contradiction:
 
-* ``global`` - true of every photo ("Biscuit is a black Labrador.")
+* ``global`` - true of every photo ("Biscuit is a Golden Retriever.")
 * ``album``  - true of one album, keyed by SmugMug album key
 * ``image``  - true of one image, keyed by SmugMug image key
 
 Storage is a hand-editable YAML file, ``~/.smugvision/hints.yaml`` by default::
 
-    global: "Biscuit is a black Labrador. Ada and Sam are our children."
+    global: "Biscuit is a Golden Retriever. Ada and Sam are our children."
     albums:
       Ab3kZq: "This is Biscuit's 7th birthday party."
     images:
@@ -56,7 +56,7 @@ _FILE_HEADER = """# smugVision hints
 #
 # Scopes are combined most-general-first: global, then the album, then the image.
 #
-#   global: "Biscuit is a black Labrador."
+#   global: "Biscuit is a Golden Retriever."
 #   albums:
 #     Ab3kZq: "This is Biscuit's 7th birthday party."
 #   images:

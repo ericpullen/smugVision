@@ -455,7 +455,7 @@ CLI and the web UI.
 Three scopes, which **accumulate** — global, then album, then image:
 
 ```yaml
-global: "Biscuit is a Charcoal Labrador. Ada and Sam are our children."
+global: "Biscuit is a Golden Retriever. Ada and Sam are our children."
 albums:
   Ab3kZq: "Biscuit's 7th birthday party."
 images:
@@ -496,8 +496,8 @@ of the web UI:
 
 ```yaml
 pets:
-  Biscuit: This is Biscuit, a Charcoal Labrador, and the family pet.
-  Pepper: This is Pepper, the family Lionhead Black bunny.
+  Biscuit: This is Biscuit, a Golden Retriever, and the family dog.
+  Pepper: This is Pepper, the family's grey tabby cat.
 ```
 
 ![The pets editor on the Hints page](docs/screenshots/08-pets-editor.png)

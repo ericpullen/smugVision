@@ -7,8 +7,8 @@ list of named animals and the sentence the model should be told about each one.
 The file lives at ``~/.smugvision/pets.yaml`` and looks like this::
 
     pets:
-      Biscuit: This is Biscuit, a Charcoal Labrador, and the family pet.
-      Willow: This is Willow, the family cat.
+      Biscuit: This is Biscuit, a Golden Retriever, and the family dog.
+      Pepper: This is Pepper, the family's grey tabby cat.
 
 The value is the whole sentence rather than a set of fields, because the sentence is
 what reaches the model and the user is better placed than a template to decide how
@@ -51,7 +51,7 @@ _FILE_HEADER = """# smugVision pets
 # the way you would want it said:
 #
 #   pets:
-#     Biscuit: This is Biscuit, a Charcoal Labrador, and the family pet.
+#     Biscuit: This is Biscuit, a Golden Retriever, and the family dog.
 #
 # The key is also added as a keyword on any photo the pet is ticked for.
 
@@ -212,7 +212,7 @@ class PetManager:
         Args:
             name: Pet name, also used as a keyword on tagged photos
             description: The sentence the model is told, e.g.
-                "This is Biscuit, a Charcoal Labrador, and the family pet."
+                "This is Biscuit, a Golden Retriever, and the family dog."
 
         Returns:
             The stored name, stripped

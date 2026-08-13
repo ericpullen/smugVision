@@ -158,8 +158,8 @@ def save_pet():
     """Add or update one pet.
 
     Request body:
-        ``{"name": "Biscuit", "description": "This is Biscuit, a Charcoal Labrador, and
-        the family pet."}``
+        ``{"name": "Biscuit", "description": "This is Biscuit, a Golden Retriever,
+        and the family dog."}``
 
     The description is the exact sentence handed to the vision model as ground truth,
     so it is stored verbatim rather than assembled from fields.

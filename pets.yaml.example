@@ -14,9 +14,9 @@
 # searchable on SmugMug afterwards.
 
 pets:
-  Biscuit: This is Biscuit, a Charcoal Labrador, and the family pet.
-  Pepper: This is Pepper, the family Lionhead Black bunny.
+  Biscuit: This is Biscuit, a Golden Retriever, and the family dog.
+  Pepper: This is Pepper, the family's grey tabby cat.
 
   # A pet that is not yours is worth spelling out, so a caption does not adopt it into
   # the family:
-  # Scout: This is Scout, a dog belonging to Sam and Casey rather than to us.
+  # Scout: This is Scout, a dog belonging to our neighbours rather than to us.
