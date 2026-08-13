@@ -374,15 +374,40 @@
             return;
         }
 
+        // Already-proofed frames are left out of the run unless "re-proof" is ticked,
+        // so an album that is fully done has nothing to stream. Say so plainly rather
+        // than opening an empty proof sheet.
+        if (!job.total_images) {
+            dom.progressBar.value = 100;
+            dom.progressTitle.textContent = 'Nothing left to proof';
+            S.announce(
+                dom.progressLine,
+                job.excluded_count
+                    ? S.plural(job.excluded_count, 'image') + ' in ' + job.album_name +
+                      ' already carry the smugVision tag. Tick "Re-proof images that ' +
+                      'smugVision already tagged" to go through them again.'
+                    : 'This album has no images to proof.'
+            );
+            restore();
+            running = false;
+            dom.urlBtn.disabled = false;
+            dom.runBtn.disabled = !selected;
+            return;
+        }
+
         dom.progressTitle.textContent = 'Proofing ' + job.album_name;
         dom.progressBar.value = 0;
         dom.progressBar.max = 100;
         S.announce(
             dom.progressLine,
-            '0 of ' + job.total_images + ' images. Nothing is being written.'
+            '0 of ' + job.total_images + ' images' +
+            (job.excluded_count
+                ? ' (' + job.excluded_count + ' already tagged, left out)'
+                : '') +
+            '. Nothing is being written.'
         );
 
-        streamProgress(job, force, restore);
+        streamProgress(job, restore);
     }
 
     /**
@@ -391,10 +416,11 @@
      * whether the proof sheet opens its write panel, never whether a write
      * happens - that still needs the latch and the confirm dialog.
      */
-    function streamProgress(job, force, restore) {
+    function streamProgress(job, restore) {
+        // No force_reprocess here on purpose: which images are in the run was settled
+        // when the job was created, and the server reads it back off the job.
         const source = new EventSource(
-            '/api/preview/status?job_id=' + encodeURIComponent(job.job_id) +
-            '&force_reprocess=' + (force ? 'true' : 'false')
+            '/api/preview/status?job_id=' + encodeURIComponent(job.job_id)
         );
         let finished = false;
 
@@ -416,7 +442,9 @@
             S.announce(
                 dom.progressLine,
                 stats.processed + ' proposed, ' + stats.skipped + ' skipped, ' +
-                stats.errors + ' failed. Opening the proof sheet…'
+                stats.errors + ' failed' +
+                (stats.excluded ? ', ' + stats.excluded + ' already tagged' : '') +
+                '. Opening the proof sheet…'
             );
 
             let target = '/preview/' + encodeURIComponent(job.job_id);

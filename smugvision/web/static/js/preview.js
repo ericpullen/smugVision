@@ -140,6 +140,11 @@
             ['errors', stats.errors, 'failed'],
             ['total', stats.total, 'total']
         ];
+        // Only worth a slot when some frames were held back; a zero here would read as
+        // "nothing was already tagged", which is noise on a first pass.
+        if (stats.excluded) {
+            entries.push(['excluded', stats.excluded, 'already tagged']);
+        }
         S.setChildren(dom.tally, entries.map(function (entry) {
             const classes = [entry[0]];
             if (!entry[1]) classes.push('is-zero');

@@ -114,6 +114,13 @@ class PreviewJob:
     processed_count: int = 0
     skipped_count: int = 0
     error_count: int = 0
+    # True = proof every image, including ones already carrying the marker tag. Stored on
+    # the job because the image list is selected when the job is created: the streaming
+    # request cannot change its mind later without the count and the loop disagreeing.
+    force_reprocess: bool = False
+    # Images left out of this run because they were already tagged. Not the same as
+    # skipped_count, which counts images the processor skipped mid-run.
+    excluded_count: int = 0
     # None = use processing.preserve_existing from config; False = replace the existing
     # caption and keywords instead of merging into them, for this job only.
     preserve_existing: Optional[bool] = None
@@ -135,6 +142,7 @@ class PreviewJob:
                 "processed": self.processed_count,
                 "skipped": self.skipped_count,
                 "errors": self.error_count,
+                "excluded": self.excluded_count,
             },
             "error": self.error,
         }
@@ -421,6 +429,37 @@ class PreviewService:
         
         return album_key, album.name
     
+    def images_to_proof(
+        self, album_key: str, force_reprocess: bool
+    ) -> Tuple[List[AlbumImage], int]:
+        """Select the images a proof run should actually work on.
+
+        Videos are never proofed. Unless ``force_reprocess`` is set, images that already
+        carry the marker tag are left out entirely rather than being handed to the
+        processor and coming back as skips - proofing an album a second time should
+        present only the frames that still need attention.
+
+        Both the count reported when a job is created and the loop that processes it go
+        through here, so they can never disagree about what is in the run.
+
+        Args:
+            album_key: SmugMug album key
+            force_reprocess: If True, keep already-tagged images in the run
+
+        Returns:
+            Tuple of (images to proof, number of already-tagged images excluded)
+
+        Raises:
+            SmugMugError: If the album's images cannot be read
+        """
+        images = [img for img in self.smugmug.get_album_images(album_key) if not img.is_video]
+
+        if force_reprocess:
+            return images, 0
+
+        pending = [img for img in images if self.processor.needs_processing(img)]
+        return pending, len(images) - len(pending)
+
     def create_preview_job(
         self,
         url: Optional[str] = None,
@@ -437,7 +476,9 @@ class PreviewService:
 
         Args:
             url: SmugMug album URL
-            force_reprocess: Whether to reprocess already-tagged images
+            force_reprocess: Whether to include images that already carry the marker
+                tag. When False they are left out of the job entirely, so
+                ``total_images`` counts only the frames that still need proofing.
             album_key: SmugMug album key, as an alternative to ``url``
 
         Returns:
@@ -461,17 +502,14 @@ class PreviewService:
         if clean_url:
             resolved_key, _ = self.resolve_album_from_url(clean_url)
 
-        # Get album and count images
+        # Get album and select the images this run will work on
         album = self.smugmug.get_album(resolved_key)
         album_name = album.name
-        images = self.smugmug.get_album_images(resolved_key)
+        images, excluded = self.images_to_proof(resolved_key, force_reprocess)
 
-        # Filter to images only (no videos for now)
-        images = [img for img in images if not img.is_video]
-        
         # Clean up old jobs to limit memory usage
         self._cleanup_old_jobs()
-        
+
         # Create job
         job = PreviewJob(
             job_id=str(uuid.uuid4())[:8],
@@ -481,13 +519,18 @@ class PreviewService:
             total_images=len(images),
             preserve_existing=preserve_existing,
             generate_titles=generate_titles,
+            force_reprocess=force_reprocess,
+            excluded_count=excluded,
         )
-        
+
         # Store job
         self._jobs[job.job_id] = job
-        
-        logger.info(f"Created preview job {job.job_id} for album {album_name} ({len(images)} images)")
-        
+
+        logger.info(
+            f"Created preview job {job.job_id} for album {album_name} "
+            f"({len(images)} to proof, {excluded} already tagged and left out)"
+        )
+
         return job
     
     def get_job(self, job_id: str) -> Optional[PreviewJob]:
@@ -519,20 +562,20 @@ class PreviewService:
             self._jobs = jobs_to_keep
             logger.debug(f"Cleaned up {removed_count} old preview jobs")
     
-    def process_preview(
-        self,
-        job_id: str,
-        force_reprocess: bool = False
-    ) -> Generator[Dict[str, Any], None, None]:
+    def process_preview(self, job_id: str) -> Generator[Dict[str, Any], None, None]:
         """Process album preview, yielding progress events.
-        
+
         This uses the main ImageProcessor to ensure 100% consistent behavior
         with the CLI tool. All processing is delegated to the core library.
-        
+
+        Whether already-tagged images are included was decided when the job was
+        created, and is read back off the job here. It deliberately is not a
+        parameter: the image list and ``total_images`` were fixed at creation time, so
+        a caller passing a different value could only make the progress counter lie.
+
         Args:
             job_id: Preview job ID
-            force_reprocess: Whether to reprocess already-tagged images
-            
+
         Yields:
             Event dictionaries with type and data
         """
@@ -540,39 +583,58 @@ class PreviewService:
         if not job:
             yield {"event": "error", "data": {"message": f"Job {job_id} not found"}}
             return
-        
+
         try:
-            # Get album and images
+            # Get album and the same image selection the job was sized from
             album = self.smugmug.get_album(job.album_key)
-            images = self.smugmug.get_album_images(job.album_key)
-            
-            # Filter to images only
-            images = [img for img in images if not img.is_video]
-            
+            images, _ = self.images_to_proof(job.album_key, job.force_reprocess)
+
+            if not images:
+                job.status = "complete"
+                logger.info(
+                    f"Preview job {job_id} had nothing to proof "
+                    f"({job.excluded_count} already tagged)"
+                )
+                yield {
+                    "event": "complete",
+                    "data": {
+                        "processed": 0,
+                        "skipped": 0,
+                        "errors": 0,
+                        "excluded": job.excluded_count,
+                    },
+                }
+                return
+
             marker_tag = self.config.get("processing.marker_tag", "smugvision")
-            
+
+            # The album can change between creating the job and streaming it, so size the
+            # progress bar from what is actually being processed now.
+            total = len(images)
+            job.total_images = total
+
             for i, image in enumerate(images, 1):
                 job.current_image = i
                 job.current_filename = image.file_name
-                
+
                 # Yield progress event
                 yield {
                     "event": "progress",
                     "data": {
                         "current": i,
-                        "total": job.total_images,
+                        "total": total,
                         "filename": image.file_name,
-                        "percent": int((i / job.total_images) * 100),
+                        "percent": int((i / total) * 100),
                     }
                 }
-                
+
                 # Process using the main ImageProcessor (dry_run=True)
                 # This ensures 100% identical behavior to CLI
                 processor = self.processor_for(job.preserve_existing, job.generate_titles)
                 proc_result = processor.process_image(
                     image=image,
                     album=album,
-                    force_reprocess=force_reprocess
+                    force_reprocess=job.force_reprocess
                 )
                 
                 # Convert ProcessingResult to ImagePreviewResult for UI
@@ -600,14 +662,19 @@ class PreviewService:
             # Mark job complete
             job.status = "complete"
             
-            logger.info(f"Preview job {job_id} complete: {job.processed_count} processed, {job.skipped_count} skipped, {job.error_count} errors")
-            
+            logger.info(
+                f"Preview job {job_id} complete: {job.processed_count} processed, "
+                f"{job.skipped_count} skipped, {job.error_count} errors, "
+                f"{job.excluded_count} already tagged and left out"
+            )
+
             yield {
                 "event": "complete",
                 "data": {
                     "processed": job.processed_count,
                     "skipped": job.skipped_count,
                     "errors": job.error_count,
+                    "excluded": job.excluded_count,
                 }
             }
             

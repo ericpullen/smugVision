@@ -717,6 +717,23 @@ class ImageProcessor:
                     split_tags.append(part)
         return split_tags
 
+    def needs_processing(self, image: AlbumImage) -> bool:
+        """Check whether an image still needs processing.
+
+        This is the same marker-tag test :meth:`process_image` applies internally,
+        exposed so a caller can filter an album *before* processing rather than
+        processing everything and discarding the skips. Callers that filter this way
+        and callers that rely on the internal skip therefore always agree.
+
+        Args:
+            image: AlbumImage to inspect
+
+        Returns:
+            True if the image does not yet carry the configured marker tag
+        """
+        marker_tag = self.config.get("processing.marker_tag", "smugvision")
+        return not self._has_marker_tag(image, marker_tag)
+
     def _has_marker_tag(self, image: AlbumImage, marker_tag: str) -> bool:
         """Check whether an image already carries the processing marker tag.
 

@@ -188,6 +188,8 @@ def start_preview():
             "album_key": job.album_key,
             "album_name": job.album_name,
             "total_images": job.total_images,
+            "excluded_count": job.excluded_count,
+            "force_reprocess": job.force_reprocess,
             "status": job.status,
         })
 
@@ -206,16 +208,18 @@ def start_preview():
 def preview_status():
     """Stream preview progress via Server-Sent Events.
     
+    Whether already-tagged images are part of the run was decided by
+    ``POST /api/preview``; a ``force_reprocess`` query param here is accepted for
+    backward compatibility and ignored, because the run's image list is already fixed.
+
     Query params:
         job_id: Preview job ID
-        force_reprocess: Whether to reprocess tagged images (optional)
-        
+
     Returns:
         SSE stream with progress events
     """
     job_id = request.args.get("job_id")
-    force_reprocess = request.args.get("force_reprocess", "false").lower() == "true"
-    
+
     if not job_id:
         return jsonify({"error": "Missing 'job_id' query parameter"}), 400
     
@@ -228,7 +232,7 @@ def preview_status():
     def generate():
         """Generate SSE events."""
         try:
-            for event in service.process_preview(job_id, force_reprocess):
+            for event in service.process_preview(job_id):
                 event_type = event.get("event", "message")
                 event_data = json.dumps(event.get("data", {}))
                 logger.debug(f"SSE sending event: {event_type}")
@@ -290,6 +294,7 @@ def preview_results():
             "processed": job.processed_count,
             "skipped": job.skipped_count,
             "errors": job.error_count,
+            "excluded": job.excluded_count,
         },
         "images": [result.to_dict() for result in job.results],
         "replace_existing": job.preserve_existing is False,
