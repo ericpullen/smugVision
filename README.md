@@ -9,6 +9,8 @@ Automatically generate descriptive captions and relevant tags for your SmugMug p
 
 ---
 
+![The proof sheet: proposed title, caption and keywords for each frame, with nothing written yet](docs/screenshots/04-frame-card.png)
+
 ## Features
 
 ✨ **AI-Powered Metadata Generation**
@@ -379,6 +381,8 @@ CLI, so anything true of one is true of the other.
 
 ### Step 1 — choose an album
 
+![Album picker: the folder tree with a proof badge on each album](docs/screenshots/01-album-picker.png)
+
 Browse the folder tree one level at a time. Each album carries a badge saying whether
 smugVision has been here before:
 
@@ -392,6 +396,8 @@ smugVision has been here before:
 Badges appear a moment after the list, because reading keywords costs one request per 100
 images per album. **Refresh** forces a re-scan.
 
+![Run panel: frame count, time estimate and the three run toggles](docs/screenshots/02-run-panel.png)
+
 Three toggles before you start:
 
 - **Re-proof images that smugVision already tagged** — off by default, so a second pass over an
@@ -400,6 +406,8 @@ Three toggles before you start:
 - **Propose a Title as well** — follows `processing.generate_titles` from your config.
 
 ### Step 2 — proof it
+
+![Proof sheet header: 43 proposed, nothing written yet, and the album-wide note box](docs/screenshots/03-proof-sheet.png)
 
 One card per frame: the photograph, what is on SmugMug now, and what smugVision proposes.
 Under each card you can correct what the model got wrong:
@@ -411,16 +419,25 @@ Under each card you can correct what the model got wrong:
   The ☆ pins somebody to the top row for good.
 - **Any pets in this frame** — see below
 
+![Who is in this frame: pinned people as large tiles, everyone else in a drawer, pet chips below](docs/screenshots/05-people-and-pets.png)
+
+*(Faces other than the author's are blurred and names replaced in this screenshot; the real
+thing shows your own reference faces.)*
+
 **Save note & re-read** re-runs that one frame. At the album level, **Save & re-read all N
 frames** applies a new album note to every frame in the run, one at a time, with a stop button.
 
 ### Writing
+
+![The write panel: safelight red, a list of every frame, and a latch that must be armed](docs/screenshots/06-write-panel.png)
 
 The write panel is the only thing here that touches SmugMug. Expand it, arm the latch, press the
 button, and confirm the dialog, which names exactly how many images are about to change. After a
 clean write you land back on the album list at the folder you started from, with the album's
 badge brought up to date. A partial write keeps you on the proof sheet so you can see what
 failed.
+
+![The confirmation dialog, naming the album and the exact number of images](docs/screenshots/07-confirm-write.png)
 
 ---
 
@@ -482,6 +499,8 @@ pets:
   Biscuit: This is Biscuit, a Charcoal Labrador, and the family pet.
   Pepper: This is Pepper, the family Lionhead Black bunny.
 ```
+
+![The pets editor on the Hints page](docs/screenshots/08-pets-editor.png)
 
 The value is the whole sentence, because that is what the model is told - write it the way you
 want it said. Tick a pet on a frame and its sentence joins the prompt as ground truth while its
