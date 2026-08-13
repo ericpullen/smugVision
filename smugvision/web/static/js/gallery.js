@@ -41,6 +41,7 @@
         dom.catalogError = document.getElementById('catalog-error');
         dom.refreshBtn = document.getElementById('refresh-btn');
         dom.cacheNote = document.getElementById('cache-note');
+        dom.returnNotice = document.getElementById('return-notice');
 
         dom.selection = document.getElementById('selection');
         dom.selectionName = document.getElementById('selection-name');
@@ -85,9 +86,37 @@
             startRun({url: url}, 'the pasted album');
         });
 
-        loadLevel(null, {});
+        const opening = new URLSearchParams(window.location.search);
+        showReturnNotice(opening);
+        loadLevel(opening.get('node') || null, {});
         loadServiceStatus();
     });
+
+    /**
+     * Report a write that happened on the proof sheet we just came back from.
+     *
+     * The proof sheet navigates here after a clean write, so the confirmation has to
+     * survive the trip. It is carried in the query string and then stripped from the
+     * address bar, so reloading this page does not re-announce a write that is over.
+     */
+    function showReturnNotice(params) {
+        const wrote = params.get('wrote');
+        if (wrote === null) return;
+
+        const count = parseInt(wrote, 10);
+        const album = params.get('album') || 'that album';
+        setNotice(
+            dom.returnNotice,
+            (Number.isFinite(count) ? S.plural(count, 'image') : 'Changes') +
+            ' written to ' + album + '. Its badge below is up to date.',
+            'ok'
+        );
+
+        params.delete('wrote');
+        params.delete('album');
+        const rest = params.toString();
+        window.history.replaceState({}, '', rest ? '/?' + rest : '/');
+    }
 
     /* -------------------------------------------------------------- *
      * Listing one level
@@ -548,6 +577,7 @@
         const force = dom.forceReprocess.checked;
         const payload = Object.assign({
             force_reprocess: force,
+            origin_node: currentNode || '',
             replace_existing: dom.replaceExisting.checked,
             generate_titles: dom.generateTitles.checked
         }, body);

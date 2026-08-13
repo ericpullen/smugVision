@@ -152,6 +152,10 @@ class PreviewJob:
     preserve_existing: Optional[bool] = None
     # None = use processing.generate_titles from config.
     generate_titles: Optional[bool] = None
+    # The folder the picker was showing when this run was started, so the proof sheet
+    # can send the user back to exactly that level instead of the root of the tree.
+    # Empty for a run started from a pasted URL, which has no browsing position.
+    origin_node: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -672,7 +676,8 @@ class PreviewService:
         force_reprocess: bool = False,
         album_key: Optional[str] = None,
         preserve_existing: Optional[bool] = None,
-        generate_titles: Optional[bool] = None
+        generate_titles: Optional[bool] = None,
+        origin_node: str = ""
     ) -> PreviewJob:
         """Create a new preview job for an album.
 
@@ -686,6 +691,10 @@ class PreviewService:
                 tag. When False they are left out of the job entirely, so
                 ``total_images`` counts only the frames that still need proofing.
             album_key: SmugMug album key, as an alternative to ``url``
+            preserve_existing: Overrides processing.preserve_existing for this job
+            generate_titles: Overrides processing.generate_titles for this job
+            origin_node: Node ID the picker was showing, remembered so the proof sheet
+                can return there after a write
 
         Returns:
             New PreviewJob instance
@@ -727,6 +736,7 @@ class PreviewService:
             generate_titles=generate_titles,
             force_reprocess=force_reprocess,
             excluded_count=excluded,
+            origin_node=(origin_node or "").strip(),
         )
 
         # Store job

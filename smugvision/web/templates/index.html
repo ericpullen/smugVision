@@ -15,6 +15,10 @@
         </p>
     </header>
 
+    <!-- Carries the outcome of a write back from the proof sheet, which navigates here
+         afterwards. Populated from the query string, so a reload does not repeat it. -->
+    <p class="notice hidden" id="return-notice" role="status"></p>
+
     <div class="browser-toolbar">
         <nav aria-label="Gallery path" style="flex: 1 1 20rem; min-width: 0;">
             <ol class="crumbs" id="crumbs">

@@ -688,9 +688,25 @@ dl {
     color: var(--caution);
 }
 
+/* Used for the write confirmation carried back to the picker. Green because it is the
+   one notice that reports something good having already happened. */
+.notice.ok {
+    background: var(--added);
+    border-color: var(--added-rule);
+    border-left-color: var(--added-ink);
+    color: var(--added-ink);
+}
+
 .notice h4 {
     color: inherit;
     margin-bottom: var(--s1);
+}
+
+/* Way back to the picker, kept quiet: it sits under the album title and must not
+   compete with it. */
+.back-link {
+    margin: var(--s2) 0 0;
+    font-size: 0.85rem;
 }
 
 .info-box {

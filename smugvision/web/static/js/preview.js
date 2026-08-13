@@ -34,6 +34,7 @@
     let albumPicker = null;   // album-scope people picker, built after results load
     let albumPetPicker = null;    // album-scope pet picker
     let knownPets = [];           // [{name, description}] from pets.yaml
+    let originNode = '';          // folder the picker was on when this run started
     let pendingWriteKeys = null;  // image keys the open confirm dialog named
     let regenerating = 0;         // in-flight single-frame re-reads
     let sweeping = false;         // an album-wide re-read is running
@@ -52,6 +53,7 @@
         const root = document.getElementById('proof-root');
         jobId = root.dataset.jobId;
 
+        dom.backLink = document.getElementById('back-to-albums');
         dom.albumTitle = document.getElementById('album-title');
         dom.albumKeyEl = document.getElementById('album-key');
         dom.tally = document.getElementById('tally');
@@ -144,6 +146,8 @@
 
         albumKey = data.album_key;
         albumName = data.album_name;
+        originNode = data.origin_node || '';
+        if (dom.backLink) dom.backLink.href = albumsUrl();
         images = data.images || [];
         hints = data.hints || {enabled: false, global: '', album: '', images: {}};
 
@@ -1272,6 +1276,46 @@
         S.setChildren(dom.writeList, []);
         dom.writeSummary.textContent =
             'Written. Re-run the album to propose further changes.';
+
+        returnToAlbums(result);
+    }
+
+    /**
+     * URL of the picker, restored to the folder this run was started from.
+     *
+     * A run started from a pasted URL has no browsing position, so it falls back to
+     * the root rather than inventing one.
+     *
+     * @param {Object} [extra] additional query parameters
+     * @returns {string}
+     */
+    function albumsUrl(extra) {
+        const params = [];
+        if (originNode) params.push('node=' + encodeURIComponent(originNode));
+        Object.keys(extra || {}).forEach(function (key) {
+            params.push(key + '=' + encodeURIComponent(extra[key]));
+        });
+        return '/' + (params.length ? '?' + params.join('&') : '');
+    }
+
+    /**
+     * Send the user back to the album list after a clean write.
+     *
+     * Only when nothing failed: a partial write is exactly when the user needs to stay
+     * and read which frames did not make it. The pause is long enough to see the
+     * result on this page, and the summary is repeated on the picker so leaving does
+     * not lose it.
+     */
+    function returnToAlbums(result) {
+        if (result.errors) return;
+
+        const target = albumsUrl({
+            wrote: result.committed,
+            album: albumName
+        });
+        window.setTimeout(function () {
+            window.location.href = target;
+        }, 1800);
     }
 
     function showWriteResult(message, kind) {

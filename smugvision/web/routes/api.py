@@ -282,6 +282,8 @@ def start_preview():
     preserve_existing = None if replace_existing is None else (not replace_existing)
     raw_titles = data.get("generate_titles")
     generate_titles = None if raw_titles is None else bool(raw_titles)
+    # Where the picker was, so the proof sheet can go back there after a write.
+    origin_node = _string_field(data, "origin_node")
 
     try:
         service = get_preview_service()
@@ -291,6 +293,7 @@ def start_preview():
             album_key=album_key or None,
             preserve_existing=preserve_existing,
             generate_titles=generate_titles,
+            origin_node=origin_node,
         )
 
         return jsonify({
@@ -409,6 +412,7 @@ def preview_results():
             "excluded": job.excluded_count,
         },
         "images": [result.to_dict() for result in job.results],
+        "origin_node": job.origin_node,
         "replace_existing": job.preserve_existing is False,
         "hints": _job_hints(service, job),
         "error": job.error,
